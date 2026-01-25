@@ -285,12 +285,78 @@ func (c *AudioRecordingConfig) GetParticipantConfig(participantID string) *Parti
 }
 
 // GetAudioRecordingConfig returns the AudioRecordingConfig from pipeline config
+// If in isolated audio recording mode (RoomComposite + DUAL_CHANNEL_ALTERNATE),
+// it creates the config from FileOutput configuration
 func (p *PipelineConfig) GetAudioRecordingConfig() *AudioRecordingConfig {
+	// First check for explicit AudioRecording output
 	o, ok := p.Outputs[types.EgressTypeAudioRecording]
-	if !ok || len(o) == 0 {
+	if ok && len(o) > 0 {
+		return o[0].(*AudioRecordingConfig)
+	}
+
+	// In isolated audio recording mode, create config from FileOutput
+	if p.IsolatedAudioRecording {
+		return p.createAudioRecordingConfigFromFileOutput()
+	}
+
+	return nil
+}
+
+// createAudioRecordingConfigFromFileOutput creates an AudioRecordingConfig
+// from the existing FileOutput configuration for isolated recording mode
+func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecordingConfig {
+	fileConfig := p.GetFileConfig()
+	if fileConfig == nil {
 		return nil
 	}
-	return o[0].(*AudioRecordingConfig)
+
+	// Determine format from file output type
+	var formats []types.AudioRecordingFormat
+	switch fileConfig.OutputType {
+	case types.OutputTypeOGG:
+		formats = []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus}
+	case types.OutputTypeWAV:
+		formats = []types.AudioRecordingFormat{types.AudioRecordingFormatWAVPCM}
+	default:
+		// Default to OGG for audio recording
+		formats = []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus}
+	}
+
+	// Use audio frequency from config, default to 48000
+	sampleRate := p.AudioFrequency
+	if sampleRate == 0 {
+		sampleRate = 48000
+	}
+
+	// Use TmpDir for local directory, or derive from file path
+	localDir := p.TmpDir
+	if localDir == "" && fileConfig.LocalFilepath != "" {
+		localDir = path.Dir(fileConfig.LocalFilepath)
+	}
+
+	arConfig := &AudioRecordingConfig{
+		RoomName:           p.Info.RoomName,
+		SessionID:          p.Info.EgressId,
+		IsolatedTracks:     true,
+		FinalRoomMix:       false, // Can be enabled via config extension
+		Formats:            formats,
+		SampleRate:         sampleRate,
+		LocalDir:           localDir,
+		ParticipantConfigs: make(map[string]*ParticipantAudioConfig),
+	}
+
+	// Initialize manifest
+	arConfig.AudioManifest = NewAudioRecordingManifest(
+		p.Info.EgressId,    // egressID
+		p.Info.RoomId,      // roomID
+		p.Info.RoomName,    // roomName
+		p.Info.EgressId,    // sessionID (use egressID as session)
+		arConfig.Formats,   // formats
+		arConfig.SampleRate, // sampleRate
+		"",                 // encryption (none for now)
+	)
+
+	return arConfig
 }
 
 // HasIsolatedTracks returns true if isolated track recording is enabled

@@ -47,6 +47,17 @@ func NewSink(
 	monitor *stats.HandlerMonitor,
 ) (Sink, error) {
 
+	// Check for isolated audio recording mode (RoomComposite + DUAL_CHANNEL_ALTERNATE)
+	// In this mode, use AudioRecordingSink instead of standard FileSink
+	if conf.IsolatedAudioRecording && egressType == types.EgressTypeFile {
+		logger.Infow("creating isolated audio recording sink")
+		arConf := conf.GetAudioRecordingConfig()
+		if arConf != nil {
+			return newAudioRecordingSink(p, conf, arConf, monitor)
+		}
+		// Fall through to standard file sink if no audio recording config
+	}
+
 	switch egressType {
 	case types.EgressTypeFile:
 		return newFileSink(p, conf, o.(*config.FileConfig), monitor)

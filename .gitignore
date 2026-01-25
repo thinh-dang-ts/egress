@@ -8,3 +8,12 @@ test/*.yaml
 !test/config-sample.yaml
 CLAUDE.md
 .local_files
+config.yaml
+
+# Docker compose
+docker-compose.override.yaml
+
+# Local directories
+tmp/
+output/
+.vscode

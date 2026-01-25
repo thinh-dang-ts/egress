@@ -178,7 +178,7 @@ func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 	// 3. Compute alignment
 	alignment := ComputeAlignment(manifest)
 	if err := ValidateAlignment(alignment); err != nil {
-		logger.Warnw("alignment validation warning", "error", err)
+		logger.Warnw("alignment validation warning", err)
 	}
 
 	// 4. Build and run merge pipeline
@@ -249,7 +249,7 @@ func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *co
 
 		localPath := path.Join(tmpDir, fmt.Sprintf("%s_%s", p.ParticipantID, artifact.Filename))
 		if err := w.downloadFile(ctx, artifact.StorageURI, localPath); err != nil {
-			logger.Warnw("failed to download participant file", "error", err, "participantID", p.ParticipantID)
+			logger.Warnw("failed to download participant file", err, "participantID", p.ParticipantID)
 			continue
 		}
 
@@ -266,19 +266,7 @@ func (w *MergeWorker) downloadFile(ctx context.Context, remotePath, localPath st
 		return nil
 	}
 
-	reader, err := w.storage.DownloadFile(remotePath)
-	if err != nil {
-		return err
-	}
-	defer reader.Close()
-
-	f, err := os.Create(localPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-
-	_, err = io.Copy(f, reader)
+	_, err := w.storage.DownloadFile(remotePath, localPath)
 	return err
 }
 

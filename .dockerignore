@@ -1,0 +1,37 @@
+# Git
+.git
+.gitignore
+.github
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# Build artifacts
+tmp/
+output/
+*.log
+
+# Test files
+test/
+media-samples/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Config (will be mounted)
+config.yaml
+!config.yaml.example
+
+# Docker
+docker-compose*.yaml
+.dockerignore

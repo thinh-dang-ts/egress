@@ -129,7 +129,7 @@ func (b *AudioRecordingBin) onTrackRemoved(trackID string) {
 	logger.Debugw("removing audio recording bin for track", "trackID", trackID)
 
 	// The bin will flush and finalize on removal
-	if err := pBin.Bin.SetState(gstreamer.StateNull); err != nil {
+	if err := pBin.Bin.SetState(gst.StateNull); err != nil {
 		logger.Errorw("failed to set participant bin state to null", err, "trackID", trackID)
 	}
 
@@ -464,7 +464,7 @@ func (b *AudioRecordingBin) Close() error {
 	defer b.mu.Unlock()
 
 	for trackID, pBin := range b.participantBins {
-		if err := pBin.Bin.SetState(gstreamer.StateNull); err != nil {
+		if err := pBin.Bin.SetState(gst.StateNull); err != nil {
 			logger.Errorw("failed to close participant bin", err, "trackID", trackID)
 		}
 	}

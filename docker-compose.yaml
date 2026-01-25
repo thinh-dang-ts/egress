@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # Redis service (optional - only needed if you don't have Redis running locally)
+  redis:
+    image: redis:7-alpine
+    container_name: egress-redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    command: redis-server --appendonly yes
+    networks:
+      - egress-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    profiles:
+      - with-redis  # Only start if explicitly requested
+
+  # LiveKit Egress Service
+  egress:
+    build:
+      context: .
+      dockerfile: build/egress/Dockerfile
+      args:
+        # Use 'latest' to pull published templates from DockerHub
+        # Use 'local' if you've built templates locally (see docs/DOCKER_COMPOSE.md)
+        TEMPLATE_TAG: latest
+    container_name: egress-service
+    image: livekit/egress:local
+    environment:
+      - EGRESS_CONFIG_FILE=/config/config.yaml
+      # Optional: Override config with environment variables
+      # - LIVEKIT_API_KEY=${LIVEKIT_API_KEY}
+      # - LIVEKIT_API_SECRET=${LIVEKIT_API_SECRET}
+      # - LIVEKIT_WS_URL=${LIVEKIT_WS_URL}
+    volumes:
+      # Mount config file
+      - ./config.yaml:/config/config.yaml:ro
+      # Mount temp directory for recordings
+      - ./tmp/egress:/tmp
+      # Optional: Mount output directory if storing files locally
+      - ./output:/output
+    ports:
+      - "8080:8080"  # Health check port
+      - "7980:7980"  # Template port
+      - "9090:9090"  # Prometheus metrics port
+    networks:
+      - egress-network
+    # Note: Redis dependency is optional (redis is in a profile)
+    # If using redis service, uncomment the depends_on below
+    # depends_on:
+    #   redis:
+    #     condition: service_healthy
+    restart: unless-stopped
+    # For local development on macOS/Windows, use host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # Merge Worker Service (for offline audio merging)
+  merge-worker:
+    build:
+      context: .
+      dockerfile: build/egress/Dockerfile
+      args:
+        TEMPLATE_TAG: latest
+    container_name: egress-merge-worker
+    image: livekit/egress:local
+    command: ["egress", "merge-worker"]
+    environment:
+      - EGRESS_CONFIG_FILE=/config/config.yaml
+      - MERGE_WORKER_ID=worker-1
+      - MERGE_TMP_DIR=/tmp/merge
+    volumes:
+      # Mount config file (same as egress service)
+      - ./config.yaml:/config/config.yaml:ro
+      # Mount temp directory for merge operations
+      - ./tmp/merge:/tmp/merge
+      # Optional: Mount output directory if storing files locally
+      - ./output:/output
+    networks:
+      - egress-network
+    depends_on:
+      - egress  # Start after egress service
+    # Note: Redis dependency is optional (redis is in a profile)
+    # If using redis service, add it to depends_on:
+    # depends_on:
+    #   - egress
+    #   redis:
+    #     condition: service_healthy
+    restart: unless-stopped
+    # For local development on macOS/Windows, use host.docker.internal
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    # Note: To scale merge workers, use: docker-compose up --scale merge-worker=3
+
+networks:
+  egress-network:
+    driver: bridge
+
+volumes:
+  redis-data:
+    driver: local

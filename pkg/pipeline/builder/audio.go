@@ -117,6 +117,15 @@ func (a *audioPacer) stop() {
 }
 
 func BuildAudioBin(pipeline *gstreamer.Pipeline, p *config.PipelineConfig) error {
+	// Check for isolated audio recording mode
+	// In this mode, each participant gets their own isolated pipeline (no audiomixer)
+	if p.IsolatedAudioRecording {
+		logger.Infow("building isolated audio recording pipeline")
+		_, err := NewAudioRecordingBin(pipeline, p)
+		return err
+	}
+
+	// Standard mixed audio pipeline
 	b := &AudioBin{
 		bin:   pipeline.NewBin(audioBinName),
 		conf:  p,

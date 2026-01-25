@@ -53,6 +53,11 @@ type PipelineConfig struct {
 	OutputCount          atomic.Int32                        `yaml:"-"`
 	FinalizationRequired bool                                `yaml:"-"`
 
+	// IsolatedAudioRecording indicates per-participant isolated audio files
+	// Triggered by audio_only + AudioMixing_DUAL_CHANNEL_ALTERNATE
+	IsolatedAudioRecording bool                     `yaml:"-"`
+	AudioRecordingManifest *AudioRecordingManifest  `yaml:"-"`
+
 	Info     *livekit.EgressInfo `yaml:"-"`
 	Manifest *Manifest           `yaml:"-"`
 }
@@ -590,6 +595,16 @@ func (p *PipelineConfig) getRoomCompositeRequestType(req *livekit.RoomCompositeE
 
 	// apply audio mixing option
 	p.AudioMixing = req.AudioMixing
+
+	// Check for isolated audio recording mode
+	// Triggered by audio_only + AudioMixing_DUAL_CHANNEL_ALTERNATE
+	if req.AudioMixing == livekit.AudioMixing_DUAL_CHANNEL_ALTERNATE {
+		p.IsolatedAudioRecording = true
+		logger.Infow("isolated audio recording mode enabled",
+			"roomName", req.RoomName,
+			"audioMixing", req.AudioMixing.String(),
+		)
+	}
 
 	return types.SourceTypeSDK
 }
