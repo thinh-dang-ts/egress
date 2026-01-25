@@ -63,6 +63,9 @@ func NewSink(
 	case types.EgressTypeImages:
 		return newImageSink(p, conf, o.(*config.ImageConfig), callbacks, monitor)
 
+	case types.EgressTypeAudioRecording:
+		return newAudioRecordingSink(p, conf, o.(*config.AudioRecordingConfig), monitor)
+
 	default:
 		return nil, errors.ErrInvalidInput("output type")
 	}

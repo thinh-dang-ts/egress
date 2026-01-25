@@ -31,6 +31,7 @@ import (
 	"github.com/livekit/egress/pkg/errors"
 	"github.com/livekit/egress/pkg/handler"
 	"github.com/livekit/egress/pkg/info"
+	"github.com/livekit/egress/pkg/merge"
 	"github.com/livekit/egress/pkg/server"
 	"github.com/livekit/egress/version"
 	"github.com/livekit/protocol/logger"
@@ -64,6 +65,33 @@ func main() {
 				},
 				Action: runHandler,
 				Hidden: true,
+			},
+			{
+				Name:        "merge-worker",
+				Description: "runs the offline audio merge worker",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:    "config",
+						Usage:   "LiveKit Egress yaml config file",
+						Sources: cli.EnvVars("EGRESS_CONFIG_FILE"),
+					},
+					&cli.StringFlag{
+						Name:    "config-body",
+						Usage:   "LiveKit Egress yaml config body",
+						Sources: cli.EnvVars("EGRESS_CONFIG_BODY"),
+					},
+					&cli.StringFlag{
+						Name:    "worker-id",
+						Usage:   "Unique worker ID",
+						Sources: cli.EnvVars("MERGE_WORKER_ID"),
+					},
+					&cli.StringFlag{
+						Name:    "tmp-dir",
+						Usage:   "Temporary directory for merge operations",
+						Sources: cli.EnvVars("MERGE_TMP_DIR"),
+					},
+				},
+				Action: runMergeWorker,
 			},
 		},
 		Flags: []cli.Flag{
@@ -208,4 +236,55 @@ func runHandler(_ context.Context, c *cli.Command) error {
 
 	h.Run()
 	return nil
+}
+
+func runMergeWorker(ctx context.Context, c *cli.Command) error {
+	configFile := c.String("config")
+	configBody := c.String("config-body")
+	if configBody == "" {
+		if configFile == "" {
+			return errors.ErrNoConfig
+		}
+		content, err := os.ReadFile(configFile)
+		if err != nil {
+			return err
+		}
+		configBody = string(content)
+	}
+
+	conf, err := config.NewServiceConfig(configBody)
+	if err != nil {
+		return err
+	}
+
+	rc, err := lkredis.GetRedisClient(conf.Redis)
+	if err != nil {
+		return err
+	}
+
+	workerID := c.String("worker-id")
+	tmpDir := c.String("tmp-dir")
+
+	workerConfig := &merge.MergeWorkerConfig{
+		WorkerID:      workerID,
+		TmpDir:        tmpDir,
+		StorageConfig: conf.StorageConfig,
+	}
+
+	worker, err := merge.NewMergeWorker(rc, workerConfig)
+	if err != nil {
+		return err
+	}
+
+	stopChan := make(chan os.Signal, 1)
+	signal.Notify(stopChan, syscall.SIGTERM, syscall.SIGQUIT, syscall.SIGINT)
+
+	go func() {
+		<-stopChan
+		logger.Infow("shutdown signal received, stopping merge worker")
+		worker.Stop()
+	}()
+
+	logger.Infow("starting merge worker", "workerID", workerID)
+	return worker.Run(ctx)
 }

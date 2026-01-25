@@ -6,3 +6,4 @@ build/plugins/
 test/output/*
 test/*.yaml
 !test/config-sample.yaml
+CLAUDE.md

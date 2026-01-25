@@ -21,25 +21,28 @@ type MimeType string
 type Profile string
 type OutputType string
 type FileExtension string
+type AudioRecordingFormat string
 
 const (
 	// request types
-	RequestTypeRoomComposite  = "room_composite"
-	RequestTypeWeb            = "web"
-	RequestTypeParticipant    = "participant"
-	RequestTypeTrackComposite = "track_composite"
-	RequestTypeTrack          = "track"
+	RequestTypeRoomComposite   = "room_composite"
+	RequestTypeWeb             = "web"
+	RequestTypeParticipant     = "participant"
+	RequestTypeTrackComposite  = "track_composite"
+	RequestTypeTrack           = "track"
+	RequestTypeAudioRecording  = "audio_recording"
 
 	// source types
 	SourceTypeWeb SourceType = "web"
 	SourceTypeSDK SourceType = "sdk"
 
 	// egress types
-	EgressTypeStream    EgressType = "stream"
-	EgressTypeWebsocket EgressType = "websocket"
-	EgressTypeFile      EgressType = "file"
-	EgressTypeSegments  EgressType = "segments"
-	EgressTypeImages    EgressType = "images"
+	EgressTypeStream         EgressType = "stream"
+	EgressTypeWebsocket      EgressType = "websocket"
+	EgressTypeFile           EgressType = "file"
+	EgressTypeSegments       EgressType = "segments"
+	EgressTypeImages         EgressType = "images"
+	EgressTypeAudioRecording EgressType = "audio_recording"
 
 	// input types
 	MimeTypeAAC      MimeType = "audio/aac"
@@ -64,6 +67,7 @@ const (
 	OutputTypeRaw         OutputType = "audio/x-raw"
 	OutputTypeOGG         OutputType = "audio/ogg"
 	OutputTypeMP3         OutputType = "audio/mpeg"
+	OutputTypeWAV         OutputType = "audio/wav"
 	OutputTypeIVF         OutputType = "video/x-ivf"
 	OutputTypeMP4         OutputType = "video/mp4"
 	OutputTypeTS          OutputType = "video/mp2t"
@@ -79,19 +83,31 @@ const (
 	FileExtensionRaw  = ".raw"
 	FileExtensionOGG  = ".ogg"
 	FileExtensionMP3  = ".mp3"
+	FileExtensionWAV  = ".wav"
 	FileExtensionIVF  = ".ivf"
 	FileExtensionMP4  = ".mp4"
 	FileExtensionTS   = ".ts"
 	FileExtensionWebM = ".webm"
 	FileExtensionM3U8 = ".m3u8"
 	FileExtensionJPEG = ".jpeg"
+
+	// audio recording formats
+	AudioRecordingFormatOGGOpus AudioRecordingFormat = "ogg_opus"
+	AudioRecordingFormatWAVPCM  AudioRecordingFormat = "wav_pcm"
 )
+
+// Audio recording sample rates (in Hz)
+var ValidAudioRecordingSampleRates = []int32{8000, 16000, 24000, 32000, 44100, 48000}
+
+// Default audio recording sample rate
+const DefaultAudioRecordingSampleRate = int32(32000)
 
 var (
 	DefaultAudioCodecs = map[OutputType]MimeType{
 		OutputTypeRaw:  MimeTypeRawAudio,
 		OutputTypeOGG:  MimeTypeOpus,
 		OutputTypeMP3:  MimeTypeMP3,
+		OutputTypeWAV:  MimeTypeRawAudio,
 		OutputTypeMP4:  MimeTypeAAC,
 		OutputTypeTS:   MimeTypeAAC,
 		OutputTypeWebM: MimeTypeOpus,
@@ -114,6 +130,7 @@ var (
 		FileExtensionRaw:  {},
 		FileExtensionOGG:  {},
 		FileExtensionMP3:  {},
+		FileExtensionWAV:  {},
 		FileExtensionIVF:  {},
 		FileExtensionMP4:  {},
 		FileExtensionTS:   {},
@@ -126,6 +143,7 @@ var (
 		OutputTypeRaw:  FileExtensionRaw,
 		OutputTypeOGG:  FileExtensionOGG,
 		OutputTypeMP3:  FileExtensionMP3,
+		OutputTypeWAV:  FileExtensionWAV,
 		OutputTypeIVF:  FileExtensionIVF,
 		OutputTypeMP4:  FileExtensionMP4,
 		OutputTypeTS:   FileExtensionTS,
@@ -140,6 +158,12 @@ var (
 		},
 		OutputTypeOGG: {
 			MimeTypeOpus: true,
+		},
+		OutputTypeWAV: {
+			MimeTypeRawAudio: true,
+			MimeTypeOpus:     true,
+			MimeTypePCMU:     true,
+			MimeTypePCMA:     true,
 		},
 		OutputTypeIVF: {
 			MimeTypeVP8: true,
@@ -203,6 +227,7 @@ var (
 		OutputTypeOGG,
 		OutputTypeMP4,
 		OutputTypeMP3,
+		OutputTypeWAV,
 	}
 	VideoOnlyFileOutputTypes = []OutputType{
 		OutputTypeMP4,
