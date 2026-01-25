@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   # Redis service (optional - only needed if you don't have Redis running locally)
   redis:
@@ -17,8 +15,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 5
-    profiles:
-      - with-redis  # Only start if explicitly requested
 
   # LiveKit Egress Service
   egress:
@@ -50,11 +46,9 @@ services:
       - "9090:9090"  # Prometheus metrics port
     networks:
       - egress-network
-    # Note: Redis dependency is optional (redis is in a profile)
-    # If using redis service, uncomment the depends_on below
-    # depends_on:
-    #   redis:
-    #     condition: service_healthy
+    depends_on:
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     # For local development on macOS/Windows, use host.docker.internal
     extra_hosts:
@@ -84,13 +78,10 @@ services:
     networks:
       - egress-network
     depends_on:
-      - egress  # Start after egress service
-    # Note: Redis dependency is optional (redis is in a profile)
-    # If using redis service, add it to depends_on:
-    # depends_on:
-    #   - egress
-    #   redis:
-    #     condition: service_healthy
+      egress:
+        condition: service_started
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     # For local development on macOS/Windows, use host.docker.internal
     extra_hosts:
