@@ -167,6 +167,12 @@ func (b *AudioRecordingBin) addParticipantBin(ts *config.TrackSource) error {
 		return err
 	}
 
+	// Register participant with config to generate file paths
+	// Use trackID as participantID for now (SDK source will provide actual participant info)
+	participantID := ts.TrackID
+	participantIdentity := ts.TrackID // Will be updated later if available
+	b.arConf.AddParticipant(participantID, participantIdentity, ts.TrackID)
+
 	// Create file sinks for each format
 	fileSinks := make(map[types.AudioRecordingFormat]*gst.Element)
 

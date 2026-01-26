@@ -67,7 +67,7 @@ type MergeJobEnqueuer interface {
 
 // newAudioRecordingSink creates a new audio recording sink
 func newAudioRecordingSink(
-	p *gstreamer.Pipeline,
+	_ *gstreamer.Pipeline,
 	conf *config.PipelineConfig,
 	o *config.AudioRecordingConfig,
 	monitor *stats.HandlerMonitor,

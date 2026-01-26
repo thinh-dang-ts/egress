@@ -118,6 +118,14 @@ func Integration(configFile string) error {
 }
 
 func Retest(configFile string) error {
+	return retestWithRun(configFile, "")
+}
+
+func RetestRun(configFile string, testPattern string) error {
+	return retestWithRun(configFile, testPattern)
+}
+
+func retestWithRun(configFile string, testPattern string) error {
 	if configFile != "" {
 		if strings.HasPrefix(configFile, "test/") {
 			configFile = configFile[5:]
@@ -154,8 +162,13 @@ func Retest(configFile string) error {
 		return err
 	}
 
+	envVars := fmt.Sprintf("-e EGRESS_CONFIG_FILE=%s", configFile)
+	if testPattern != "" {
+		envVars += fmt.Sprintf(" -e TEST_RUN=%s", testPattern)
+	}
+
 	return mageutil.Run(context.Background(),
-		fmt.Sprintf("docker run --rm -e EGRESS_CONFIG_FILE=%s -v %s/test:/out egress-test", configFile, dir),
+		fmt.Sprintf("docker run --rm %s -v %s/test:/out egress-test", envVars, dir),
 	)
 }
 

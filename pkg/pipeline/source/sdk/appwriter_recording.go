@@ -404,7 +404,7 @@ func (w *RecordingAppWriter) Playing() {
 }
 
 // Drain initiates graceful shutdown
-func (w *RecordingAppWriter) Drain(force bool) {
+func (w *RecordingAppWriter) Drain(_ bool) {
 	w.draining.Once(func() {
 		w.logger.Debugw("draining recording writer")
 	})

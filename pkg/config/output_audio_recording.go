@@ -132,11 +132,7 @@ func (c *AudioRecordingConfig) Validate() error {
 	}
 
 	// Validate encryption config
-	if err := c.validateEncryption(); err != nil {
-		return err
-	}
-
-	return nil
+	return c.validateEncryption()
 }
 
 // validateEncryption validates encryption settings

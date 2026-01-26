@@ -58,7 +58,7 @@ func ComputeAlignment(manifest *config.AudioRecordingManifest) *AlignmentResult 
 	result.ReferenceStart = earliestServerTime
 
 	// Compute alignment for each participant
-	var maxEndTime int64 = earliestServerTime
+	maxEndTime := earliestServerTime
 	for _, p := range manifest.Participants {
 		info := computeParticipantAlignment(p, earliestServerTime)
 		result.Alignments = append(result.Alignments, info)

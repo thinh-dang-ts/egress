@@ -260,7 +260,7 @@ func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *co
 }
 
 // downloadFile downloads a file from storage
-func (w *MergeWorker) downloadFile(ctx context.Context, remotePath, localPath string) error {
+func (w *MergeWorker) downloadFile(_ context.Context, remotePath, localPath string) error {
 	if w.storage == nil {
 		// Local storage - file should already exist or we can't download
 		return nil
@@ -301,7 +301,7 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 	mixerPads := ""
 	for participantID, filePath := range participantFiles {
 		// Find alignment for this participant
-		var offset int64 = 0
+		var offset int64
 		for _, a := range alignment.Alignments {
 			if a.ParticipantID == participantID {
 				offset = a.GetIdentityTsOffset()
@@ -356,7 +356,7 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 }
 
 // uploadMergedFiles uploads the merged files to storage
-func (w *MergeWorker) uploadMergedFiles(ctx context.Context, manifest *config.AudioRecordingManifest, mergedFiles map[types.AudioRecordingFormat]string) error {
+func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.AudioRecordingManifest, mergedFiles map[types.AudioRecordingFormat]string) error {
 	manifest.InitRoomMix()
 
 	for format, localPath := range mergedFiles {
@@ -418,7 +418,7 @@ func (w *MergeWorker) calculateChecksum(filepath string) (string, int64, error) 
 }
 
 // updateManifestWithMergeResults updates and re-uploads the manifest
-func (w *MergeWorker) updateManifestWithMergeResults(ctx context.Context, manifestPath string, manifest *config.AudioRecordingManifest) error {
+func (w *MergeWorker) updateManifestWithMergeResults(_ context.Context, manifestPath string, manifest *config.AudioRecordingManifest) error {
 	data, err := manifest.ToJSON()
 	if err != nil {
 		return err

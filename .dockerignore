@@ -13,9 +13,9 @@ tmp/
 output/
 *.log
 
-# Test files
-test/
-media-samples/
+# Test files (commented out for integration tests)
+# test/
+# media-samples/
 
 # IDE
 .vscode/

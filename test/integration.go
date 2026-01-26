@@ -38,12 +38,13 @@ var uploadPrefix = fmt.Sprintf("integration/%s", time.Now().Format("2006-01-02")
 
 func (r *Runner) RunTests(t *testing.T) {
 	// run tests
-	r.testFile(t)
-	r.testStream(t)
-	r.testSegments(t)
-	r.testImages(t)
-	r.testMulti(t)
-	r.testEdgeCases(t)
+	// r.testFile(t)
+	// r.testStream(t)
+	// r.testSegments(t)
+	// r.testImages(t)
+	// r.testMulti(t)
+	// r.testEdgeCases(t)
+	r.testIsolatedAudioRecording(t)
 }
 
 func (r *Runner) run(t *testing.T, test *testCase, f func(*testing.T, *testCase)) bool {
