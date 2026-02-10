@@ -150,6 +150,13 @@ func (w *MergeWorker) processNextJob(ctx context.Context) error {
 	return w.queue.Complete(ctx, job)
 }
 
+// ProcessMergeJob processes a single merge job using the provided config and storage.
+// This can be called by both the queue-based MergeWorker and the InProcessMergeEnqueuer.
+func ProcessMergeJob(ctx context.Context, cfg *MergeWorkerConfig, store storage.Storage, job *MergeJob) error {
+	w := &MergeWorker{config: cfg, storage: store}
+	return w.processJob(ctx, job)
+}
+
 // processJob processes a single merge job
 func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 	// Create temp directory for this job

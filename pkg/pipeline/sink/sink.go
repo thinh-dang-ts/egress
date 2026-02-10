@@ -20,9 +20,11 @@ import (
 	"github.com/livekit/egress/pkg/config"
 	"github.com/livekit/egress/pkg/errors"
 	"github.com/livekit/egress/pkg/gstreamer"
+	"github.com/livekit/egress/pkg/merge"
 	"github.com/livekit/egress/pkg/stats"
 	"github.com/livekit/egress/pkg/types"
 	"github.com/livekit/protocol/logger"
+	lkredis "github.com/livekit/protocol/redis"
 )
 
 type Sink interface {
@@ -53,7 +55,12 @@ func NewSink(
 		logger.Infow("creating isolated audio recording sink")
 		arConf := conf.GetAudioRecordingConfig()
 		if arConf != nil {
-			return newAudioRecordingSink(p, conf, arConf, monitor)
+			s, err := newAudioRecordingSink(p, conf, arConf, monitor)
+			if err != nil {
+				return nil, err
+			}
+			wireMergeEnqueuer(s, conf)
+			return s, nil
 		}
 		// Fall through to standard file sink if no audio recording config
 	}
@@ -75,7 +82,12 @@ func NewSink(
 		return newImageSink(p, conf, o.(*config.ImageConfig), callbacks, monitor)
 
 	case types.EgressTypeAudioRecording:
-		return newAudioRecordingSink(p, conf, o.(*config.AudioRecordingConfig), monitor)
+		s, err := newAudioRecordingSink(p, conf, o.(*config.AudioRecordingConfig), monitor)
+		if err != nil {
+			return nil, err
+		}
+		wireMergeEnqueuer(s, conf)
+		return s, nil
 
 	default:
 		return nil, errors.ErrInvalidInput("output type")
@@ -93,4 +105,26 @@ func (s *base) AddEOSProbe() {
 
 func (s *base) EOSReceived() bool {
 	return s.eosReceived.Load()
+}
+
+// wireMergeEnqueuer sets up the appropriate MergeJobEnqueuer on the AudioRecordingSink
+// based on the MergeInProcess config flag.
+func wireMergeEnqueuer(s *AudioRecordingSink, conf *config.PipelineConfig) {
+	if conf.MergeInProcess {
+		enqueuer, err := merge.NewInProcessMergeEnqueuer(conf.StorageConfig)
+		if err != nil {
+			logger.Errorw("failed to create in-process merge enqueuer", err)
+			return
+		}
+		s.SetMergeJobEnqueuer(enqueuer)
+		logger.Debugw("using in-process merge enqueuer")
+	} else if conf.Redis != nil {
+		rc, err := lkredis.GetRedisClient(conf.Redis)
+		if err != nil {
+			logger.Errorw("failed to create redis client for merge enqueuer", err)
+			return
+		}
+		s.SetMergeJobEnqueuer(merge.NewMergeJobEnqueuer(rc))
+		logger.Debugw("using redis-based merge enqueuer")
+	}
 }

@@ -101,6 +101,11 @@ func NewServiceConfig(confString string) (*ServiceConfig, error) {
 		}
 	}
 
+	// env var override for merge_in_process
+	if v := os.Getenv("MERGE_IN_PROCESS"); v == "true" || v == "1" {
+		conf.MergeInProcess = true
+	}
+
 	// always create a new node ID
 	conf.NodeID = utils.NewGuid("NE_")
 	conf.InitDefaults()
