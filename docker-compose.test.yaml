@@ -1,0 +1,13 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: build/test-unit/Dockerfile
+      args:
+        GO_VERSION: 1.24.5
+    container_name: egress-test
+    image: livekit/egress-test:local
+    volumes:
+      - .:/workspace
+    working_dir: /workspace
+    command: ["tail", "-f", "/dev/null"]

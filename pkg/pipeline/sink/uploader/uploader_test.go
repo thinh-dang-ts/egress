@@ -20,6 +20,10 @@ func TestUploader(t *testing.T) {
 	region := os.Getenv("AWS_REGION")
 	bucket := os.Getenv("AWS_BUCKET")
 
+	if key == "" || secret == "" || region == "" || bucket == "" {
+		t.Skip("AWS credentials not set, skipping uploader test")
+	}
+
 	primary := &config.StorageConfig{
 		S3: &storage.S3Config{
 			AccessKey: "nonsense",
