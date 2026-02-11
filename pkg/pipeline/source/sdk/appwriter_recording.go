@@ -72,10 +72,10 @@ type RecordingAppWriter struct {
 	ringCapacity int
 
 	// Clock sync info for offline alignment
-	clockSyncInfo    *config.ClockSyncInfo
-	firstPacketTime  int64
+	clockSyncInfo     *config.ClockSyncInfo
+	firstPacketTime   int64
 	firstRTPTimestamp uint32
-	clockRate        uint32
+	clockRate         uint32
 	clockInfoCaptured bool
 
 	// Depacketizer
@@ -86,13 +86,13 @@ type RecordingAppWriter struct {
 	callbacks *gstreamer.Callbacks
 
 	// State
-	active        atomic.Bool
-	lastReceived  atomic.Time
-	lastPTS       time.Duration
-	initialized   bool
-	playing       core.Fuse
-	draining      core.Fuse
-	finished      core.Fuse
+	active       atomic.Bool
+	lastReceived atomic.Time
+	lastPTS      time.Duration
+	initialized  bool
+	playing      core.Fuse
+	draining     core.Fuse
+	finished     core.Fuse
 
 	// Stats
 	packetsReceived atomic.Uint64
@@ -294,6 +294,12 @@ func (w *RecordingAppWriter) pushLoop() {
 		case <-w.draining.Watch():
 			// Push any remaining packets
 			w.pushPendingPackets()
+
+			// Send EOS to appsrc so the standalone bin's filesink
+			// properly finalizes the file and posts EOS to the bus
+			if flow := w.src.EndStream(); flow != gst.FlowOK && flow != gst.FlowFlushing {
+				w.logger.Errorw("unexpected flow return on EndStream", nil, "flowReturn", flow.String())
+			}
 			return
 		}
 	}

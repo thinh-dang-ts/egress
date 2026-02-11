@@ -59,6 +59,10 @@ func NewSink(
 			if err != nil {
 				return nil, err
 			}
+			// Link FileInfo so the audio recording sink can report size/location
+			if fc, ok := o.(*config.FileConfig); ok {
+				s.fileInfo = fc.FileInfo
+			}
 			wireMergeEnqueuer(s, conf)
 			return s, nil
 		}

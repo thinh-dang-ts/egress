@@ -23,6 +23,7 @@ pulseaudio -D --verbose --exit-idle-time=-1 --disallow-exit
 ./mediamtx > /dev/null 2>&1 &
 
 # Run tests
+TEST_RUN='TestEgress/IsolatedAudioRecording'
 TEST_FLAGS="-test.v -test.timeout 30m"
 if [[ -n ${TEST_RUN+x} ]]; then
   TEST_FLAGS="$TEST_FLAGS -test.run $TEST_RUN"
@@ -34,3 +35,5 @@ else
   go install github.com/gotesttools/gotestfmt/v2/cmd/gotestfmt@latest
   exec go tool test2json -p egress ./test.test $TEST_FLAGS 2>&1 | "$HOME"/go/bin/gotestfmt
 fi
+
+

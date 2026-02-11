@@ -73,9 +73,18 @@ func NewAudioRecordingBin(pipeline *gstreamer.Pipeline, conf *config.PipelineCon
 		participantBins: make(map[string]*ParticipantRecordingBin),
 	}
 
-	// Set up track callbacks
+	// Set up track callbacks for dynamically added tracks
 	pipeline.AddOnTrackAdded(b.onTrackAdded)
 	pipeline.AddOnTrackRemoved(b.onTrackRemoved)
+
+	// Process initial tracks that arrived before pipeline building
+	for _, ts := range conf.AudioTracks {
+		if ts.TrackKind == lksdk.TrackKindAudio {
+			if err := b.addParticipantBin(ts); err != nil {
+				return nil, err
+			}
+		}
+	}
 
 	return b, nil
 }
@@ -121,18 +130,16 @@ func (b *AudioRecordingBin) onTrackRemoved(trackID string) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 
-	pBin, ok := b.participantBins[trackID]
+	_, ok := b.participantBins[trackID]
 	if !ok {
 		return
 	}
 
 	logger.Debugw("removing audio recording bin for track", "trackID", trackID)
 
-	// The bin will flush and finalize on removal
-	if err := pBin.Bin.SetState(gst.StateNull); err != nil {
-		logger.Errorw("failed to set participant bin state to null", err, "trackID", trackID)
-	}
-
+	// Don't set to NULL here — the writer has already sent EOS to the appsrc
+	// via EndStream(). Let EOS propagate through the bin so filesink finalizes
+	// properly and posts EOS to the pipeline bus for correct EOS aggregation.
 	delete(b.participantBins, trackID)
 
 	if b.onParticipantRemoved != nil {
@@ -146,6 +153,11 @@ func (b *AudioRecordingBin) addParticipantBin(ts *config.TrackSource) error {
 	b.nextID++
 
 	bin := b.pipeline.NewBin(binName)
+	// EOS is handled by CloseWriters() on the SDK source, not by sending
+	// GStreamer EOS events to this bin. Return false to prevent bin-level EOS.
+	bin.SetEOSFunc(func() bool {
+		return false
+	})
 
 	// Configure app source
 	ts.AppSrc.Element.SetArg("format", "time")
@@ -224,7 +236,7 @@ func (b *AudioRecordingBin) addParticipantBin(ts *config.TrackSource) error {
 
 	b.participantBins[ts.TrackID] = pBin
 
-	return b.pipeline.AddSourceBin(bin)
+	return b.pipeline.AddStandaloneBin(bin)
 }
 
 // addDepayloaderAndDecoder adds RTP depayloader and audio decoder
@@ -366,6 +378,28 @@ func (b *AudioRecordingBin) createFileSink(bin *gstreamer.Bin, trackID string, f
 
 // createOggOpusSink creates encoder, muxer, and sink for OGG/Opus format
 func (b *AudioRecordingBin) createOggOpusSink(bin *gstreamer.Bin, filepath string) (*gst.Element, error) {
+	// Resample to a rate opusenc supports (8000, 12000, 16000, 24000, 48000).
+	// The shared capsfilter may output a rate like 32000 which opusenc rejects.
+	opusRate := b.nearestOpusRate()
+	if opusRate != b.arConf.SampleRate {
+		resample, err := gst.NewElement("audioresample")
+		if err != nil {
+			return nil, errors.ErrGstPipelineError(err)
+		}
+		opusCaps, err := gst.NewElement("capsfilter")
+		if err != nil {
+			return nil, errors.ErrGstPipelineError(err)
+		}
+		if err = opusCaps.SetProperty("caps", gst.NewCapsFromString(fmt.Sprintf(
+			"audio/x-raw,format=S16LE,layout=interleaved,rate=%d,channels=2", opusRate,
+		))); err != nil {
+			return nil, errors.ErrGstPipelineError(err)
+		}
+		if err = bin.AddElements(resample, opusCaps); err != nil {
+			return nil, err
+		}
+	}
+
 	// Opus encoder
 	opusEnc, err := gst.NewElement("opusenc")
 	if err != nil {
@@ -443,6 +477,19 @@ func (b *AudioRecordingBin) getBitrateForSampleRate() int32 {
 	default:
 		return 64 // Default to 64 kbps
 	}
+}
+
+// nearestOpusRate returns the nearest sample rate opusenc accepts
+func (b *AudioRecordingBin) nearestOpusRate() int32 {
+	opusRates := []int32{8000, 12000, 16000, 24000, 48000}
+	best := opusRates[len(opusRates)-1]
+	for _, r := range opusRates {
+		if r >= b.arConf.SampleRate {
+			best = r
+			break
+		}
+	}
+	return best
 }
 
 // GetParticipantBin returns the bin for a specific participant

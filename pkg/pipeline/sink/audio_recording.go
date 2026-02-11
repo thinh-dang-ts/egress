@@ -23,6 +23,7 @@ import (
 	"time"
 
 	"github.com/linkdata/deadlock"
+	livekit "github.com/livekit/protocol/livekit"
 
 	"github.com/livekit/egress/pkg/config"
 	"github.com/livekit/egress/pkg/gstreamer"
@@ -40,6 +41,7 @@ type AudioRecordingSink struct {
 	arConf   *config.AudioRecordingConfig
 	uploader *uploader.Uploader
 	monitor  *stats.HandlerMonitor
+	fileInfo *livekit.FileInfo // populated on close to report size/location
 
 	mu              deadlock.RWMutex
 	participantSinks map[string]*ParticipantAudioSink
@@ -203,10 +205,25 @@ func (s *AudioRecordingSink) SetParticipantClockSync(participantID string, clock
 	)
 }
 
-// uploadParticipantFiles uploads all files for a participant
+// uploadParticipantFiles uploads all files for a participant (via ParticipantAudioSink)
 func (s *AudioRecordingSink) uploadParticipantFiles(sink *ParticipantAudioSink) error {
-	for format, localPath := range sink.Config.LocalFilepaths {
-		storagePath := sink.Config.StorageFilepaths[format]
+	uploaded, err := s.uploadParticipantConfigFiles(sink.ParticipantID, sink.Config)
+	if err != nil {
+		return err
+	}
+	// Record total uploaded size as a single artifact for tracking
+	if uploaded > 0 {
+		sink.Artifacts = append(sink.Artifacts, &config.AudioArtifact{Size: uploaded})
+	}
+	return nil
+}
+
+// uploadParticipantConfigFiles uploads all files for a participant using config directly.
+// Returns the total uploaded size.
+func (s *AudioRecordingSink) uploadParticipantConfigFiles(participantID string, pConfig *config.ParticipantAudioConfig) (int64, error) {
+	var totalUploaded int64
+	for format, localPath := range pConfig.LocalFilepaths {
+		storagePath := pConfig.StorageFilepaths[format]
 
 		// Calculate checksum before upload
 		checksum, size, err := s.calculateFileChecksum(localPath)
@@ -220,7 +237,7 @@ func (s *AudioRecordingSink) uploadParticipantFiles(sink *ParticipantAudioSink) 
 		location, uploadedSize, err := s.uploader.Upload(localPath, storagePath, config.GetOutputTypeForFormat(format), false)
 		if err != nil {
 			logger.Errorw("failed to upload file", err, "path", localPath)
-			return err
+			return totalUploaded, err
 		}
 
 		// Get file duration (approximate based on size for WAV, or use metadata)
@@ -236,18 +253,18 @@ func (s *AudioRecordingSink) uploadParticipantFiles(sink *ParticipantAudioSink) 
 			UploadedAt: time.Now().UnixNano(),
 		}
 
-		sink.Artifacts = append(sink.Artifacts, artifact)
-		s.arConf.AudioManifest.AddParticipantArtifact(sink.ParticipantID, artifact)
+		s.arConf.AudioManifest.AddParticipantArtifact(participantID, artifact)
+		totalUploaded += uploadedSize
 
 		logger.Debugw("participant file uploaded",
-			"participantID", sink.ParticipantID,
+			"participantID", participantID,
 			"format", format,
 			"size", uploadedSize,
 			"duration", time.Since(start),
 		)
 	}
 
-	return nil
+	return totalUploaded, nil
 }
 
 // calculateFileChecksum calculates SHA-256 checksum of a file
@@ -312,9 +329,10 @@ func (s *AudioRecordingSink) getBitrateForSampleRate() int32 {
 	}
 }
 
-// AddEOSProbe adds EOS probe (interface requirement)
+// AddEOSProbe signals EOS received immediately since AudioRecordingSink
+// manages its own finalization in Close() without a GStreamer bin.
 func (s *AudioRecordingSink) AddEOSProbe() {
-	// For audio recording, EOS is handled per-participant
+	s.eosReceived.Store(true)
 }
 
 // EOSReceived returns whether EOS has been received (interface requirement)
@@ -345,19 +363,43 @@ func (s *AudioRecordingSink) Close() error {
 	}
 	s.closed = true
 
-	logger.Infow("closing audio recording sink", "sessionID", s.arConf.SessionID)
+	logger.Infow("closing audio recording sink",
+		"sessionID", s.arConf.SessionID,
+		"participants", len(s.arConf.ParticipantConfigs),
+	)
 
-	// Upload any remaining participant files
-	for participantID, sink := range s.participantSinks {
-		if !sink.Closed {
-			s.arConf.RemoveParticipant(participantID)
-			s.arConf.AudioManifest.UpdateParticipantLeft(participantID)
-
-			if err := s.uploadParticipantFiles(sink); err != nil {
-				logger.Errorw("failed to upload participant files on close", err, "participantID", participantID)
+	// Upload participant files. Participants may have been registered directly via
+	// AddParticipant (stored in s.participantSinks) or by the AudioRecordingBin
+	// calling arConf.AddParticipant (stored only in s.arConf.ParticipantConfigs).
+	// We iterate the config's participant map to cover both cases.
+	var totalSize int64
+	for participantID, pConfig := range s.arConf.ParticipantConfigs {
+		// Skip participants already uploaded via RemoveParticipant
+		if pSink, ok := s.participantSinks[participantID]; ok && pSink.Closed {
+			// Already uploaded; accumulate size from artifacts
+			for _, a := range pSink.Artifacts {
+				totalSize += a.Size
 			}
-			sink.Closed = true
+			continue
 		}
+
+		// Ensure participant exists in manifest (may have been added by bin only)
+		if s.arConf.AudioManifest.GetParticipant(participantID) == nil {
+			s.arConf.AudioManifest.AddParticipant(
+				participantID,
+				pConfig.ParticipantIdentity,
+				pConfig.TrackID,
+			)
+		}
+
+		s.arConf.RemoveParticipant(participantID)
+		s.arConf.AudioManifest.UpdateParticipantLeft(participantID)
+
+		uploaded, err := s.uploadParticipantConfigFiles(participantID, pConfig)
+		if err != nil {
+			logger.Errorw("failed to upload participant files on close", err, "participantID", participantID)
+		}
+		totalSize += uploaded
 	}
 
 	// Update manifest status
@@ -385,6 +427,17 @@ func (s *AudioRecordingSink) Close() error {
 	}
 
 	logger.Infow("manifest uploaded", "location", manifestLocation)
+
+	// Update FileInfo so the egress result reports correct size/location
+	if s.fileInfo != nil {
+		s.fileInfo.Filename = manifestPath
+		s.fileInfo.Location = manifestLocation
+		s.fileInfo.Size = totalSize
+		logger.Debugw("fileInfo updated",
+			"filename", s.fileInfo.Filename,
+			"size", s.fileInfo.Size,
+		)
+	}
 
 	// Enqueue merge job if FinalRoomMix is enabled
 	if s.arConf.HasFinalRoomMix() && s.mergeJobEnqueuer != nil {

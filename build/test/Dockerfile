@@ -106,6 +106,8 @@ RUN apt-get update && \
         xvfb \
         gstreamer1.0-plugins-base-
 
+RUN apt-get update && apt-get install -y libglib2.0-dev libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
+
 # install go
 COPY --from=1 /usr/local/go /usr/local/go
 ENV PATH="/usr/local/go/bin:${PATH}"
@@ -140,13 +142,18 @@ COPY --from=1 /workspace/test.test .
 COPY media-samples /media-samples
 COPY --from=1 /workspace/test/agents /agents
 COPY build/test/entrypoint.sh .
+COPY --from=template workspace/build/ /workspace_cache/cmd/server/templates/
+COPY --from=template workspace/build/ /workspace_cache/test/templates/
 
 # Force lint stage to run successfully
 COPY --from=lint /lint_ok /__lint_ok
 
 # run tests
-USER egress
+# USER egress
 ENV PATH=${PATH}:/chrome
 ENV XDG_RUNTIME_DIR=/home/egress/.cache/xdgr
 ENV CHROME_DEVEL_SANDBOX=/usr/local/sbin/chrome-devel-sandbox
-ENTRYPOINT ["./entrypoint.sh"]
+# ENTRYPOINT ["./entrypoint.sh"]
+
+# Debugging
+CMD ["tail", "-f", "/dev/null"]

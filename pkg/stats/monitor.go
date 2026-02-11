@@ -50,9 +50,10 @@ type Service interface {
 }
 
 type Monitor struct {
-	nodeID        string
-	clusterID     string
-	cpuCostConfig *config.CPUCostConfig
+	nodeID                       string
+	clusterID                    string
+	cpuCostConfig                *config.CPUCostConfig
+	enableRoomCompositeSDKSource bool
 
 	promCPULoad  prometheus.Gauge
 	requestGauge *prometheus.GaugeVec
@@ -86,12 +87,13 @@ type processStats struct {
 
 func NewMonitor(conf *config.ServiceConfig, svc Service) (*Monitor, error) {
 	m := &Monitor{
-		nodeID:        conf.NodeID,
-		clusterID:     conf.ClusterID,
-		cpuCostConfig: conf.CPUCostConfig,
-		svc:           svc,
-		pending:       make(map[string]*processStats),
-		procStats:     make(map[int]*processStats),
+		nodeID:                       conf.NodeID,
+		clusterID:                    conf.ClusterID,
+		cpuCostConfig:                conf.CPUCostConfig,
+		enableRoomCompositeSDKSource: conf.EnableRoomCompositeSDKSource,
+		svc:                          svc,
+		pending:                      make(map[string]*processStats),
+		procStats:                    make(map[int]*processStats),
 	}
 
 	m.initPrometheus()
@@ -186,7 +188,7 @@ func (m *Monitor) canAcceptRequestLocked(req *rpc.StartEgressRequest) ([]interfa
 	required := req.EstimatedCpu
 	switch r := req.Request.(type) {
 	case *rpc.StartEgressRequest_RoomComposite:
-		if !m.canAcceptWebLocked() {
+		if !m.isSDKSourceRoomComposite(r) && !m.canAcceptWebLocked() {
 			fields = append(fields, "canAccept", false, "reason", "pulse clients")
 			return fields, false
 		}
@@ -243,6 +245,15 @@ func (m *Monitor) canAcceptWebLocked() bool {
 	return clients+int(m.pendingPulseClients.Load())+pulseClientHold <= m.cpuCostConfig.MaxPulseClients
 }
 
+// isSDKSourceRoomComposite returns true if a RoomComposite request will use
+// SDK source instead of Chrome/PulseAudio (audio-only, no layout, no custom URL).
+func (m *Monitor) isSDKSourceRoomComposite(r *rpc.StartEgressRequest_RoomComposite) bool {
+	return m.enableRoomCompositeSDKSource &&
+		r.RoomComposite.AudioOnly &&
+		r.RoomComposite.Layout == "" &&
+		r.RoomComposite.CustomBaseUrl == ""
+}
+
 func (m *Monitor) AcceptRequest(req *rpc.StartEgressRequest) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -260,8 +271,10 @@ func (m *Monitor) AcceptRequest(req *rpc.StartEgressRequest) error {
 	var pulseClients int32
 	switch r := req.Request.(type) {
 	case *rpc.StartEgressRequest_RoomComposite:
-		m.webRequests.Inc()
-		pulseClients = pulseClientHold
+		if !m.isSDKSourceRoomComposite(r) {
+			m.webRequests.Inc()
+			pulseClients = pulseClientHold
+		}
 		if r.RoomComposite.AudioOnly {
 			cpuHold = m.cpuCostConfig.AudioRoomCompositeCpuCost
 		} else {
@@ -346,8 +359,12 @@ func (m *Monitor) EgressAborted(req *rpc.StartEgressRequest) {
 
 	delete(m.pending, req.EgressId)
 	m.requests.Dec()
-	switch req.Request.(type) {
-	case *rpc.StartEgressRequest_RoomComposite, *rpc.StartEgressRequest_Web:
+	switch r := req.Request.(type) {
+	case *rpc.StartEgressRequest_RoomComposite:
+		if !m.isSDKSourceRoomComposite(r) {
+			m.webRequests.Dec()
+		}
+	case *rpc.StartEgressRequest_Web:
 		m.webRequests.Dec()
 	}
 }
@@ -356,10 +373,12 @@ func (m *Monitor) EgressEnded(req *rpc.StartEgressRequest) (float64, float64, in
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	switch req.Request.(type) {
+	switch r := req.Request.(type) {
 	case *rpc.StartEgressRequest_RoomComposite:
 		m.requestGauge.With(prometheus.Labels{"type": types.RequestTypeRoomComposite}).Sub(1)
-		m.webRequests.Dec()
+		if !m.isSDKSourceRoomComposite(r) {
+			m.webRequests.Dec()
+		}
 	case *rpc.StartEgressRequest_Web:
 		m.requestGauge.With(prometheus.Labels{"type": types.RequestTypeWeb}).Sub(1)
 		m.webRequests.Dec()

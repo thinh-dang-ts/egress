@@ -1,0 +1,49 @@
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: egress-integration-redis
+    ports:
+      - "6380:6379"
+    command: redis-server --appendonly yes
+    networks:
+      - egress-integration
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  integration-test:
+    build:
+      context: .
+      dockerfile: build/test/Dockerfile
+      args:
+        TEMPLATE_TAG: sha-594b3b1
+        GO_VERSION: "1.24.5"
+        DEADLOCK: "1"
+    container_name: egress-integration-test
+    image: egress-integration-test:local
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    environment:
+      - EGRESS_CONFIG_FILE=/out/config.yaml
+      # Optionally run a single test: TEST_RUN=TestSpecificTest
+      # - TEST_RUN=
+    volumes:
+      - ./test:/out
+      - .:/workspace
+    networks:
+      - egress-integration
+    depends_on:
+      redis:
+        condition: service_healthy
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  egress-integration:
+    driver: bridge

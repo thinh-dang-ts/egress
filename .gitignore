@@ -17,3 +17,6 @@ docker-compose.override.yaml
 tmp/
 output/
 .vscode
+test/templates
+cmd/server/templates
+test.test

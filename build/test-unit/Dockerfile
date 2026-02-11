@@ -25,6 +25,21 @@ ARG GO_VERSION
 
 WORKDIR /workspace
 
+RUN apt-get update && RUN apt-get update && \
+apt-get install -y \
+    curl \
+    ffmpeg \
+    fonts-noto \
+    gnupg \
+    pulseaudio \
+    python3 \
+    python3-pip \
+    unzip \
+    wget \
+    xvfb \
+    git-lfs \
+    gstreamer1.0-plugins-base-
+
 # Install Go
 RUN wget --no-check-certificate https://go.dev/dl/go${GO_VERSION}.linux-${TARGETARCH}.tar.gz && \
     rm -rf /usr/local/go && \
@@ -41,6 +56,8 @@ COPY go.sum .
 RUN --mount=type=cache,target=/go/pkg/mod,sharing=locked \
     --mount=type=cache,target=/go/build-cache \
     go mod download
+
+RUN go install github.com/magefile/mage@latest
 
 # Copy source code
 COPY pkg/ pkg/

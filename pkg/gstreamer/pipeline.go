@@ -15,6 +15,7 @@
 package gstreamer
 
 import (
+	"fmt"
 	"math"
 	"time"
 
@@ -65,6 +66,34 @@ func (p *Pipeline) AddSourceBin(src *Bin) error {
 	}
 	p.binsAdded = true
 	return p.Bin.AddSourceBin(src)
+}
+
+// AddStandaloneBin adds a self-contained bin to the pipeline without linking
+// it to other bins. Use this for bins that have their own sink (e.g., filesink)
+// and don't need to connect to the pipeline's output.
+func (p *Pipeline) AddStandaloneBin(bin *Bin) error {
+	if err := p.pipeline.Add(bin.bin.Element); err != nil {
+		return errors.ErrGstPipelineError(err)
+	}
+
+	bin.mu.Lock()
+	if len(bin.elements) > 1 {
+		if err := gst.ElementLinkMany(bin.elements...); err != nil {
+			bin.mu.Unlock()
+			return errors.ErrGstPipelineError(err)
+		}
+	}
+	bin.mu.Unlock()
+
+	// If the pipeline is already playing, sync the bin state immediately.
+	// During building, the pipeline's state transition will propagate to all children.
+	if p.pipeline.GetCurrentState() >= gst.StatePaused {
+		if !bin.bin.SyncStateWithParent() {
+			return errors.ErrGstPipelineError(fmt.Errorf("failed to sync bin state with parent"))
+		}
+	}
+
+	return nil
 }
 
 func (p *Pipeline) AddSinkBin(sink *Bin) error {

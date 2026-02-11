@@ -290,9 +290,12 @@ func (p *PipelineConfig) GetAudioRecordingConfig() *AudioRecordingConfig {
 		return o[0].(*AudioRecordingConfig)
 	}
 
-	// In isolated audio recording mode, create config from FileOutput
+	// In isolated audio recording mode, create config from FileOutput (cached)
 	if p.IsolatedAudioRecording {
-		return p.createAudioRecordingConfigFromFileOutput()
+		if p.cachedAudioRecordingCfg == nil {
+			p.cachedAudioRecordingCfg = p.createAudioRecordingConfigFromFileOutput()
+		}
+		return p.cachedAudioRecordingCfg
 	}
 
 	return nil

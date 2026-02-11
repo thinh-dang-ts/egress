@@ -55,8 +55,9 @@ type PipelineConfig struct {
 
 	// IsolatedAudioRecording indicates per-participant isolated audio files
 	// Triggered by audio_only + AudioMixing_DUAL_CHANNEL_ALTERNATE
-	IsolatedAudioRecording bool                     `yaml:"-"`
-	AudioRecordingManifest *AudioRecordingManifest  `yaml:"-"`
+	IsolatedAudioRecording  bool                     `yaml:"-"`
+	AudioRecordingManifest  *AudioRecordingManifest  `yaml:"-"`
+	cachedAudioRecordingCfg *AudioRecordingConfig    `yaml:"-"`
 
 	Info     *livekit.EgressInfo `yaml:"-"`
 	Manifest *Manifest           `yaml:"-"`
