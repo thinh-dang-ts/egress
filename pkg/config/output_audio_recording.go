@@ -337,7 +337,7 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 		RoomName:           p.Info.RoomName,
 		SessionID:          p.Info.EgressId,
 		IsolatedTracks:     true,
-		FinalRoomMix:       false, // Can be enabled via config extension
+		FinalRoomMix:       p.FinalRoomMix,
 		Formats:            formats,
 		SampleRate:         sampleRate,
 		LocalDir:           localDir,

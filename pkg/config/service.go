@@ -120,6 +120,11 @@ func NewServiceConfig(confString string) (*ServiceConfig, error) {
 		conf.MergeInProcess = true
 	}
 
+	// env var override for final_room_mix
+	if v := os.Getenv("FINAL_ROOM_MIX"); v == "true" || v == "1" {
+		conf.FinalRoomMix = true
+	}
+
 	// always create a new node ID
 	conf.NodeID = utils.NewGuid("NE_")
 	conf.InitDefaults()

@@ -262,3 +262,6 @@ func (e *MergeJobEnqueuerImpl) EnqueueMergeJob(manifestPath string, sessionID st
 	_, err := e.queue.Enqueue(context.Background(), manifestPath, sessionID)
 	return err
 }
+
+// Wait is a no-op for the Redis-based enqueuer since jobs are processed by separate workers.
+func (e *MergeJobEnqueuerImpl) Wait() {}

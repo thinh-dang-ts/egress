@@ -65,6 +65,7 @@ type ParticipantAudioSink struct {
 // MergeJobEnqueuer interface for enqueuing merge jobs
 type MergeJobEnqueuer interface {
 	EnqueueMergeJob(manifestPath string, sessionID string) error
+	Wait() // blocks until all enqueued jobs complete (no-op for async implementations)
 }
 
 // newAudioRecordingSink creates a new audio recording sink
@@ -343,7 +344,13 @@ func (s *AudioRecordingSink) EOSReceived() bool {
 // UploadManifest uploads the manifest file
 func (s *AudioRecordingSink) UploadManifest(filepath string) (string, bool, error) {
 	storagePath := s.arConf.BuildMixedFilepath(types.AudioRecordingFormatOGGOpus)
-	storagePath = path.Join(path.Dir(storagePath), "manifest.json")
+	manifestName := "manifest.json"
+	// Controller uploads an egress-level manifest named <egress_id>.json.
+	// Keep it separate so it doesn't overwrite the isolated-audio manifest.
+	if path.Base(filepath) != "manifest.json" {
+		manifestName = "egress_manifest.json"
+	}
+	storagePath = path.Join(path.Dir(storagePath), manifestName)
 
 	location, _, err := s.uploader.Upload(filepath, storagePath, types.OutputTypeJSON, false)
 	if err != nil {
@@ -430,7 +437,7 @@ func (s *AudioRecordingSink) Close() error {
 
 	// Update FileInfo so the egress result reports correct size/location
 	if s.fileInfo != nil {
-		s.fileInfo.Filename = manifestPath
+		s.fileInfo.Filename = manifestLocation
 		s.fileInfo.Location = manifestLocation
 		s.fileInfo.Size = totalSize
 		logger.Debugw("fileInfo updated",
@@ -445,7 +452,9 @@ func (s *AudioRecordingSink) Close() error {
 			logger.Errorw("failed to enqueue merge job", err)
 			// Don't return error - recording is complete, merge is optional
 		} else {
-			logger.Infow("merge job enqueued", "sessionID", s.arConf.SessionID)
+			logger.Infow("merge job enqueued, waiting for completion", "sessionID", s.arConf.SessionID)
+			s.mergeJobEnqueuer.Wait()
+			logger.Infow("merge job completed", "sessionID", s.arConf.SessionID)
 		}
 	}
 

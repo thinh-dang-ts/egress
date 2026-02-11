@@ -195,7 +195,7 @@ func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 	}
 
 	// 5. Upload merged files
-	if err := w.uploadMergedFiles(ctx, manifest, mergedFiles); err != nil {
+	if err := w.uploadMergedFiles(ctx, manifest, mergedFiles, job.ManifestPath); err != nil {
 		return fmt.Errorf("failed to upload merged files: %w", err)
 	}
 
@@ -214,13 +214,16 @@ func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 
 // downloadManifest downloads and parses the manifest file
 func (w *MergeWorker) downloadManifest(ctx context.Context, manifestPath string, tmpDir string) (*config.AudioRecordingManifest, error) {
-	localPath := path.Join(tmpDir, "manifest.json")
-
-	if err := w.downloadFile(ctx, manifestPath, localPath); err != nil {
-		return nil, err
+	readPath := manifestPath
+	if w.storage != nil {
+		localPath := path.Join(tmpDir, "manifest.json")
+		if err := w.downloadFile(ctx, manifestPath, localPath); err != nil {
+			return nil, err
+		}
+		readPath = localPath
 	}
 
-	data, err := os.ReadFile(localPath)
+	data, err := os.ReadFile(readPath)
 	if err != nil {
 		return nil, err
 	}
@@ -254,13 +257,17 @@ func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *co
 			artifact = p.Artifacts[0]
 		}
 
-		localPath := path.Join(tmpDir, fmt.Sprintf("%s_%s", p.ParticipantID, artifact.Filename))
-		if err := w.downloadFile(ctx, artifact.StorageURI, localPath); err != nil {
-			logger.Warnw("failed to download participant file", err, "participantID", p.ParticipantID)
-			continue
+		if w.storage != nil {
+			localPath := path.Join(tmpDir, fmt.Sprintf("%s_%s", p.ParticipantID, artifact.Filename))
+			if err := w.downloadFile(ctx, artifact.StorageURI, localPath); err != nil {
+				logger.Warnw("failed to download participant file", err, "participantID", p.ParticipantID)
+				continue
+			}
+			files[p.ParticipantID] = localPath
+		} else {
+			// Local storage: use the storage URI directly as it's a local path
+			files[p.ParticipantID] = artifact.StorageURI
 		}
-
-		files[p.ParticipantID] = localPath
 	}
 
 	return files, nil
@@ -303,9 +310,12 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 	// audiomixer ! audioconvert ! audioresample ! encoder ! filesink
 
 	args := []string{"-e"} // Send EOS on interrupt
+	encodeSampleRate := sampleRate
+	if format == types.AudioRecordingFormatOGGOpus {
+		encodeSampleRate = nearestOpusRate(sampleRate)
+	}
 
 	// Add mixer input for each participant
-	mixerPads := ""
 	for participantID, filePath := range participantFiles {
 		// Find alignment for this participant
 		var offset int64
@@ -317,7 +327,6 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 		}
 
 		// Add source chain for this participant
-		padName := fmt.Sprintf("sink_%s", participantID[:8]) // Use truncated ID for pad name
 		args = append(args,
 			"filesrc", fmt.Sprintf("location=%s", filePath), "!",
 			"decodebin", "!",
@@ -325,9 +334,8 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 			"audioresample", "!",
 			fmt.Sprintf("audio/x-raw,rate=%d,channels=2", sampleRate), "!",
 			"identity", fmt.Sprintf("ts-offset=%d", offset), "!",
-			fmt.Sprintf("audiomixer.%s", padName),
+			"audiomixer.",
 		)
-		mixerPads += " "
 	}
 
 	// Add mixer and output chain
@@ -335,7 +343,7 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 		"audiomixer", "name=audiomixer", "!",
 		"audioconvert", "!",
 		"audioresample", "!",
-		fmt.Sprintf("audio/x-raw,rate=%d,channels=2,format=S16LE", sampleRate), "!",
+		fmt.Sprintf("audio/x-raw,rate=%d,channels=2,format=S16LE", encodeSampleRate), "!",
 	)
 
 	// Add encoder based on format
@@ -362,8 +370,31 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 	return nil
 }
 
+func nearestOpusRate(sampleRate int32) int32 {
+	validRates := []int32{8000, 12000, 16000, 24000, 48000}
+	nearest := validRates[0]
+	minDiff := absInt32(sampleRate - nearest)
+
+	for _, r := range validRates[1:] {
+		diff := absInt32(sampleRate - r)
+		if diff < minDiff {
+			minDiff = diff
+			nearest = r
+		}
+	}
+
+	return nearest
+}
+
+func absInt32(n int32) int32 {
+	if n < 0 {
+		return -n
+	}
+	return n
+}
+
 // uploadMergedFiles uploads the merged files to storage
-func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.AudioRecordingManifest, mergedFiles map[types.AudioRecordingFormat]string) error {
+func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.AudioRecordingManifest, mergedFiles map[types.AudioRecordingFormat]string, manifestPath string) error {
 	manifest.InitRoomMix()
 
 	for format, localPath := range mergedFiles {
@@ -380,7 +411,7 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 			config.GetFileExtensionForFormat(format),
 		)
 
-		// Upload
+		// Upload or copy to final location
 		location := storagePath
 		if w.storage != nil {
 			uploadedLocation, _, err := w.storage.UploadFile(localPath, storagePath, string(config.GetOutputTypeForFormat(format)))
@@ -388,12 +419,19 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 				return err
 			}
 			location = uploadedLocation
+		} else {
+			// Local storage: copy merged file next to manifest
+			destPath := path.Join(path.Dir(manifestPath), fmt.Sprintf("room_mix%s", config.GetFileExtensionForFormat(format)))
+			if err := copyFile(localPath, destPath); err != nil {
+				return fmt.Errorf("failed to copy merged file: %w", err)
+			}
+			location = destPath
 		}
 
 		// Create artifact
 		artifact := &config.AudioArtifact{
 			Format:     format,
-			Filename:   path.Base(storagePath),
+			Filename:   path.Base(location),
 			StorageURI: location,
 			Size:       size,
 			SHA256:     checksum,
@@ -431,17 +469,40 @@ func (w *MergeWorker) updateManifestWithMergeResults(_ context.Context, manifest
 		return err
 	}
 
-	// Write to temp file and upload
-	tmpPath := path.Join(w.config.TmpDir, "manifest_updated.json")
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	defer os.Remove(tmpPath)
-
 	if w.storage != nil {
+		// Write to temp file and upload
+		tmpPath := path.Join(w.config.TmpDir, "manifest_updated.json")
+		if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+			return err
+		}
+		defer os.Remove(tmpPath)
+
 		_, _, err = w.storage.UploadFile(tmpPath, manifestPath, string(types.OutputTypeJSON))
 		return err
 	}
 
-	return nil
+	// Local storage: write directly to the manifest path
+	return os.WriteFile(manifestPath, data, 0644)
+}
+
+// copyFile copies a file from src to dst
+func copyFile(src, dst string) error {
+	if err := os.MkdirAll(path.Dir(dst), 0755); err != nil {
+		return err
+	}
+
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	_, err = io.Copy(dstFile, srcFile)
+	return err
 }

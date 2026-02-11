@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 
 	"github.com/livekit/egress/pkg/config"
@@ -32,6 +33,7 @@ import (
 type InProcessMergeEnqueuer struct {
 	workerConfig *MergeWorkerConfig
 	storage      storage.Storage
+	wg           sync.WaitGroup
 }
 
 // NewInProcessMergeEnqueuer creates a new InProcessMergeEnqueuer.
@@ -49,7 +51,7 @@ func NewInProcessMergeEnqueuer(storageConfig *config.StorageConfig) (*InProcessM
 
 	var store storage.Storage
 	var err error
-	if storageConfig != nil {
+	if storageConfig != nil && !storageConfig.IsLocal() {
 		store, err = getStorage(storageConfig)
 		if err != nil {
 			return nil, err
@@ -79,7 +81,9 @@ func (e *InProcessMergeEnqueuer) EnqueueMergeJob(manifestPath string, sessionID 
 		"sessionID", sessionID,
 	)
 
+	e.wg.Add(1)
 	go func() {
+		defer e.wg.Done()
 		if err := ProcessMergeJob(context.Background(), e.workerConfig, e.storage, job); err != nil {
 			logger.Errorw("in-process merge job failed", err,
 				"jobID", job.ID,
@@ -94,4 +98,9 @@ func (e *InProcessMergeEnqueuer) EnqueueMergeJob(manifestPath string, sessionID 
 	}()
 
 	return nil
+}
+
+// Wait blocks until all enqueued merge jobs complete.
+func (e *InProcessMergeEnqueuer) Wait() {
+	e.wg.Wait()
 }

@@ -59,6 +59,7 @@ type BaseConfig struct {
 	S3AssumeRoleExternalID string                  `yaml:"s3_assume_role_external_id"` // if set, this external ID is used by default for S3 uploads
 
 	MergeInProcess bool `yaml:"merge_in_process"` // run merge in handler process instead of separate worker (env MERGE_IN_PROCESS)
+	FinalRoomMix   bool `yaml:"final_room_mix"`   // enable offline room mix generation after isolated recording (env FINAL_ROOM_MIX)
 
 	// advanced
 	Insecure             bool                                `yaml:"insecure"`               // allow chrome to connect to an insecure websocket
