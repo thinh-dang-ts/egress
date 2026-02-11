@@ -1,0 +1,417 @@
+// Copyright 2023 LiveKit, Inc.
+//
+// Licensed under the Apache License, Version 2.0 (the "License");
+// you may not use this file except in compliance with the License.
+// You may obtain a copy of the License at
+//
+//     http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing, software
+// distributed under the License is distributed on an "AS IS" BASIS,
+// WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+// See the License for the specific language governing permissions and
+// limitations under the License.
+
+//go:build cgo
+
+package merge
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/livekit/egress/pkg/config"
+	"github.com/livekit/egress/pkg/types"
+)
+
+func installFakeGstLaunch(t *testing.T) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := path.Join(t.TempDir(), "gst_args.log")
+	binPath := path.Join(binDir, "gst-launch-1.0")
+
+	script := `#!/bin/sh
+set -eu
+if [ -n "${TEST_GST_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$TEST_GST_LOG"
+fi
+if [ "${TEST_GST_FAIL:-0}" = "1" ]; then
+  exit 1
+fi
+out=""
+for arg in "$@"; do
+  case "$arg" in
+    location=*) out="${arg#location=}" ;;
+  esac
+done
+if [ -n "$out" ]; then
+  mkdir -p "$(dirname "$out")"
+  printf 'merged-audio' > "$out"
+fi
+`
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake gst-launch-1.0: %v", err)
+	}
+
+	t.Setenv("TEST_GST_LOG", logPath)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	return logPath
+}
+
+func TestNearestOpusRate(t *testing.T) {
+	tests := []struct {
+		name       string
+		sampleRate int32
+		expected   int32
+	}{
+		{name: "exact supported", sampleRate: 48000, expected: 48000},
+		{name: "rounds down", sampleRate: 44100, expected: 48000},
+		{name: "rounds up", sampleRate: 10000, expected: 8000},
+		{name: "middle value", sampleRate: 20000, expected: 16000},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := nearestOpusRate(tc.sampleRate); got != tc.expected {
+				t.Fatalf("nearestOpusRate(%d) = %d, want %d", tc.sampleRate, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestDownloadManifestLocal(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := path.Join(tmpDir, "manifest.json")
+
+	manifest := &config.AudioRecordingManifest{
+		RoomName:   "room-a",
+		SessionID:  "session-a",
+		SampleRate: 32000,
+		Formats:    []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus},
+	}
+	data, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("failed to marshal manifest: %v", err)
+	}
+	if err = os.WriteFile(manifestPath, data, 0o644); err != nil {
+		t.Fatalf("failed to write manifest: %v", err)
+	}
+
+	w := &MergeWorker{}
+	got, err := w.downloadManifest(context.Background(), manifestPath, tmpDir)
+	if err != nil {
+		t.Fatalf("downloadManifest() error = %v", err)
+	}
+
+	if got.RoomName != manifest.RoomName {
+		t.Fatalf("RoomName = %q, want %q", got.RoomName, manifest.RoomName)
+	}
+	if got.SessionID != manifest.SessionID {
+		t.Fatalf("SessionID = %q, want %q", got.SessionID, manifest.SessionID)
+	}
+}
+
+func TestDownloadParticipantFilesLocalPrefersOgg(t *testing.T) {
+	manifest := &config.AudioRecordingManifest{
+		Participants: []*config.ParticipantRecordingInfo{
+			{
+				ParticipantID: "p1",
+				Artifacts: []*config.AudioArtifact{
+					{Format: types.AudioRecordingFormatWAVPCM, StorageURI: "/tmp/p1.wav", Filename: "p1.wav"},
+					{Format: types.AudioRecordingFormatOGGOpus, StorageURI: "/tmp/p1.ogg", Filename: "p1.ogg"},
+				},
+			},
+			{
+				ParticipantID: "p2",
+				Artifacts:     nil,
+			},
+			{
+				ParticipantID: "p3",
+				Artifacts: []*config.AudioArtifact{
+					{Format: types.AudioRecordingFormatWAVPCM, StorageURI: "/tmp/p3.wav", Filename: "p3.wav"},
+				},
+			},
+		},
+	}
+
+	w := &MergeWorker{}
+	files, err := w.downloadParticipantFiles(context.Background(), manifest, t.TempDir())
+	if err != nil {
+		t.Fatalf("downloadParticipantFiles() error = %v", err)
+	}
+
+	if len(files) != 2 {
+		t.Fatalf("downloadParticipantFiles() returned %d files, want 2", len(files))
+	}
+	if files["p1"] != "/tmp/p1.ogg" {
+		t.Fatalf("p1 file = %q, want /tmp/p1.ogg", files["p1"])
+	}
+	if files["p3"] != "/tmp/p3.wav" {
+		t.Fatalf("p3 file = %q, want /tmp/p3.wav", files["p3"])
+	}
+}
+
+func TestUploadMergedFilesLocal(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := path.Join(tmpDir, "out", "manifest.json")
+
+	oggInput := path.Join(tmpDir, "input.ogg")
+	wavInput := path.Join(tmpDir, "input.wav")
+
+	if err := os.WriteFile(oggInput, []byte("ogg-data"), 0o644); err != nil {
+		t.Fatalf("failed to create ogg input: %v", err)
+	}
+	if err := os.WriteFile(wavInput, []byte("wav-data"), 0o644); err != nil {
+		t.Fatalf("failed to create wav input: %v", err)
+	}
+
+	mergedFiles := map[types.AudioRecordingFormat]string{
+		types.AudioRecordingFormatOGGOpus: oggInput,
+		types.AudioRecordingFormatWAVPCM:  wavInput,
+	}
+
+	manifest := &config.AudioRecordingManifest{
+		RoomName:  "room-1",
+		SessionID: "session-1",
+	}
+
+	w := &MergeWorker{}
+	if err := w.uploadMergedFiles(context.Background(), manifest, mergedFiles, manifestPath); err != nil {
+		t.Fatalf("uploadMergedFiles() error = %v", err)
+	}
+
+	if manifest.RoomMix == nil {
+		t.Fatal("expected RoomMix to be initialized")
+	}
+	if manifest.RoomMix.Status != config.AudioRecordingStatusCompleted {
+		t.Fatalf("RoomMix.Status = %q, want %q", manifest.RoomMix.Status, config.AudioRecordingStatusCompleted)
+	}
+	if len(manifest.RoomMix.Artifacts) != 2 {
+		t.Fatalf("artifact count = %d, want 2", len(manifest.RoomMix.Artifacts))
+	}
+
+	artifactsByFormat := make(map[types.AudioRecordingFormat]*config.AudioArtifact)
+	for _, a := range manifest.RoomMix.Artifacts {
+		artifactsByFormat[a.Format] = a
+	}
+
+	if artifactsByFormat[types.AudioRecordingFormatOGGOpus] == nil {
+		t.Fatal("expected OGG artifact")
+	}
+	if artifactsByFormat[types.AudioRecordingFormatWAVPCM] == nil {
+		t.Fatal("expected WAV artifact")
+	}
+
+	if _, err := os.Stat(path.Join(path.Dir(manifestPath), "room_mix.ogg")); err != nil {
+		t.Fatalf("expected copied room_mix.ogg: %v", err)
+	}
+	if _, err := os.Stat(path.Join(path.Dir(manifestPath), "room_mix.wav")); err != nil {
+		t.Fatalf("expected copied room_mix.wav: %v", err)
+	}
+}
+
+func TestUpdateManifestWithMergeResultsLocal(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := path.Join(tmpDir, "manifest.json")
+
+	manifest := &config.AudioRecordingManifest{
+		RoomName:  "room-2",
+		SessionID: "session-2",
+	}
+	manifest.InitRoomMix()
+	manifest.SetRoomMixStatus(config.AudioRecordingStatusCompleted, "")
+
+	w := &MergeWorker{}
+	if err := w.updateManifestWithMergeResults(context.Background(), manifestPath, manifest); err != nil {
+		t.Fatalf("updateManifestWithMergeResults() error = %v", err)
+	}
+
+	data, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("failed reading manifest: %v", err)
+	}
+
+	var got config.AudioRecordingManifest
+	if err = json.Unmarshal(data, &got); err != nil {
+		t.Fatalf("failed unmarshalling written manifest: %v", err)
+	}
+
+	if got.RoomMix == nil {
+		t.Fatal("written manifest missing room_mix")
+	}
+	if got.RoomMix.Status != config.AudioRecordingStatusCompleted {
+		t.Fatalf("written room_mix.status = %q, want %q", got.RoomMix.Status, config.AudioRecordingStatusCompleted)
+	}
+}
+
+func TestRunMergePipelineUsesNearestOpusRate(t *testing.T) {
+	logPath := installFakeGstLaunch(t)
+
+	w := &MergeWorker{}
+	alignment := &AlignmentResult{
+		Alignments: []*AlignmentInfo{
+			{
+				ParticipantID: "p1",
+				Offset:        10 * time.Millisecond,
+			},
+		},
+	}
+	outPath := path.Join(t.TempDir(), "room_mix.ogg")
+	err := w.runMergePipeline(
+		context.Background(),
+		map[string]string{"p1": "/tmp/p1.ogg"},
+		alignment,
+		types.AudioRecordingFormatOGGOpus,
+		outPath,
+		44100,
+	)
+	if err != nil {
+		t.Fatalf("runMergePipeline() error = %v", err)
+	}
+
+	argsLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read gst log: %v", err)
+	}
+	logText := string(argsLog)
+	if !strings.Contains(logText, "audio/x-raw,rate=48000,channels=2,format=S16LE") {
+		t.Fatalf("expected adjusted opus sample rate in args, got: %s", logText)
+	}
+	if !strings.Contains(logText, "opusenc ! oggmux !") {
+		t.Fatalf("expected opus/ogg encoder chain in args, got: %s", logText)
+	}
+	if _, err = os.Stat(outPath); err != nil {
+		t.Fatalf("expected output file to be written: %v", err)
+	}
+}
+
+func TestRunMergePipelineReturnsErrorOnCommandFailure(t *testing.T) {
+	installFakeGstLaunch(t)
+	t.Setenv("TEST_GST_FAIL", "1")
+
+	w := &MergeWorker{}
+	err := w.runMergePipeline(
+		context.Background(),
+		map[string]string{"p1": "/tmp/p1.ogg"},
+		&AlignmentResult{},
+		types.AudioRecordingFormatWAVPCM,
+		path.Join(t.TempDir(), "room_mix.wav"),
+		32000,
+	)
+	if err == nil {
+		t.Fatal("expected runMergePipeline to fail")
+	}
+	if !strings.Contains(err.Error(), "gst-launch failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestProcessJobLocalMergesAndUpdatesManifest(t *testing.T) {
+	installFakeGstLaunch(t)
+
+	tmpDir := t.TempDir()
+	manifestDir := path.Join(tmpDir, "manifest")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("failed to create manifest dir: %v", err)
+	}
+	manifestPath := path.Join(manifestDir, "manifest.json")
+
+	p1File := path.Join(tmpDir, "p1.ogg")
+	p2File := path.Join(tmpDir, "p2.ogg")
+	if err := os.WriteFile(p1File, []byte("p1"), 0o644); err != nil {
+		t.Fatalf("failed to write p1 file: %v", err)
+	}
+	if err := os.WriteFile(p2File, []byte("p2"), 0o644); err != nil {
+		t.Fatalf("failed to write p2 file: %v", err)
+	}
+
+	manifest := &config.AudioRecordingManifest{
+		RoomName:   "room-e2e",
+		SessionID:  "session-e2e",
+		StartedAt:  time.Now().UnixNano(),
+		SampleRate: 44100,
+		Formats: []types.AudioRecordingFormat{
+			types.AudioRecordingFormatOGGOpus,
+			types.AudioRecordingFormatWAVPCM,
+		},
+		Participants: []*config.ParticipantRecordingInfo{
+			{
+				ParticipantID: "p1",
+				JoinedAt:      time.Now().Add(-5 * time.Second).UnixNano(),
+				Artifacts: []*config.AudioArtifact{
+					{
+						Format:     types.AudioRecordingFormatOGGOpus,
+						Filename:   "p1.ogg",
+						StorageURI: p1File,
+						DurationMs: 1000,
+					},
+				},
+			},
+			{
+				ParticipantID: "p2",
+				JoinedAt:      time.Now().Add(-4 * time.Second).UnixNano(),
+				Artifacts: []*config.AudioArtifact{
+					{
+						Format:     types.AudioRecordingFormatOGGOpus,
+						Filename:   "p2.ogg",
+						StorageURI: p2File,
+						DurationMs: 1000,
+					},
+				},
+			},
+		},
+	}
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("failed to marshal manifest: %v", err)
+	}
+	if err = os.WriteFile(manifestPath, manifestData, 0o644); err != nil {
+		t.Fatalf("failed to write manifest: %v", err)
+	}
+
+	w := &MergeWorker{
+		config: &MergeWorkerConfig{
+			WorkerID: "test-worker",
+			TmpDir:   path.Join(tmpDir, "work"),
+		},
+	}
+	job := &MergeJob{
+		ID:           "job-1",
+		ManifestPath: manifestPath,
+		SessionID:    "session-e2e",
+	}
+	if err = w.processJob(context.Background(), job); err != nil {
+		t.Fatalf("processJob() error = %v", err)
+	}
+
+	updatedData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("failed reading updated manifest: %v", err)
+	}
+	var updated config.AudioRecordingManifest
+	if err = json.Unmarshal(updatedData, &updated); err != nil {
+		t.Fatalf("failed to unmarshal updated manifest: %v", err)
+	}
+	if updated.RoomMix == nil {
+		t.Fatal("expected room_mix in updated manifest")
+	}
+	if updated.RoomMix.Status != config.AudioRecordingStatusCompleted {
+		t.Fatalf("room_mix.status = %q, want %q", updated.RoomMix.Status, config.AudioRecordingStatusCompleted)
+	}
+	if len(updated.RoomMix.Artifacts) != 2 {
+		t.Fatalf("room_mix artifact count = %d, want 2", len(updated.RoomMix.Artifacts))
+	}
+
+	if _, err = os.Stat(path.Join(manifestDir, "room_mix.ogg")); err != nil {
+		t.Fatalf("expected room_mix.ogg output: %v", err)
+	}
+	if _, err = os.Stat(path.Join(manifestDir, "room_mix.wav")); err != nil {
+		t.Fatalf("expected room_mix.wav output: %v", err)
+	}
+}
