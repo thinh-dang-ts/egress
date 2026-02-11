@@ -1,13 +1,17 @@
 package sink
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"testing"
 
+	"github.com/livekit/egress/pkg/encryption"
+	livekit "github.com/livekit/protocol/livekit"
 	"github.com/stretchr/testify/require"
 
 	"github.com/livekit/egress/pkg/config"
@@ -40,6 +44,34 @@ func newTestSink(t *testing.T, formats []types.AudioRecordingFormat, sampleRate 
 		arConf:           arConf,
 		participantSinks: make(map[string]*ParticipantAudioSink),
 	}
+}
+
+func TestNewAudioRecordingSink_SetsManifestEncryptionWhenEnabled(t *testing.T) {
+	arConf := &config.AudioRecordingConfig{
+		RoomName:           "test-room",
+		SessionID:          "session-1",
+		Formats:            []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus},
+		SampleRate:         48000,
+		LocalDir:           t.TempDir(),
+		ParticipantConfigs: make(map[string]*config.ParticipantAudioConfig),
+		Encryption: &config.EncryptionConfig{
+			Mode:      config.EncryptionModeAES,
+			MasterKey: "dummy-key",
+		},
+	}
+
+	pipelineConf := &config.PipelineConfig{
+		Info: &livekit.EgressInfo{
+			EgressId: "egress-1",
+			RoomId:   "room-id-1",
+			RoomName: "test-room",
+		},
+	}
+
+	_, err := newAudioRecordingSink(nil, pipelineConf, arConf, nil)
+	require.NoError(t, err)
+	require.NotNil(t, arConf.AudioManifest)
+	require.Equal(t, string(config.EncryptionModeAES), arConf.AudioManifest.Encryption)
 }
 
 // --- AddParticipant tests ---
@@ -316,6 +348,50 @@ func TestGetManifest(t *testing.T) {
 	require.NotNil(t, m)
 	require.Equal(t, "test-room", m.RoomName)
 	require.Equal(t, "session-1", m.SessionID)
+}
+
+func TestPrepareUploadFile_AES(t *testing.T) {
+	s := newTestSink(t, []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus}, 48000)
+	key, err := encryption.GenerateMasterKeyBase64()
+	require.NoError(t, err)
+	s.arConf.Encryption = &config.EncryptionConfig{
+		Mode:      config.EncryptionModeAES,
+		MasterKey: key,
+	}
+
+	srcPath := filepath.Join(t.TempDir(), "participant.ogg")
+	plain := []byte("plain-audio-bytes-12345")
+	require.NoError(t, os.WriteFile(srcPath, plain, 0o644))
+
+	uploadPath, cleanup, err := s.prepareUploadFile(srcPath)
+	require.NoError(t, err)
+	defer cleanup()
+	require.NotEqual(t, srcPath, uploadPath)
+
+	ciphertext, err := os.ReadFile(uploadPath)
+	require.NoError(t, err)
+	require.NotEqual(t, plain, ciphertext)
+
+	encryptor, err := encryption.NewEnvelopeEncryptorFromBase64(key)
+	require.NoError(t, err)
+	reader, err := encryption.NewEncryptedTempFileReader(uploadPath, encryptor)
+	require.NoError(t, err)
+	defer reader.Close()
+
+	decrypted, err := io.ReadAll(reader)
+	require.NoError(t, err)
+	require.True(t, bytes.Equal(plain, decrypted))
+}
+
+func TestPrepareUploadFile_NoEncryption(t *testing.T) {
+	s := newTestSink(t, []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus}, 48000)
+	srcPath := filepath.Join(t.TempDir(), "participant.ogg")
+	require.NoError(t, os.WriteFile(srcPath, []byte("plain"), 0o644))
+
+	uploadPath, cleanup, err := s.prepareUploadFile(srcPath)
+	require.NoError(t, err)
+	defer cleanup()
+	require.Equal(t, srcPath, uploadPath)
 }
 
 // --- Close behavior tests (without real uploader) ---

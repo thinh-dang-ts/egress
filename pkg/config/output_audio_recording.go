@@ -340,8 +340,14 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 		FinalRoomMix:       p.FinalRoomMix,
 		Formats:            formats,
 		SampleRate:         sampleRate,
+		Encryption:         copyEncryptionConfig(p.AudioRecordingEncryption),
 		LocalDir:           localDir,
 		ParticipantConfigs: make(map[string]*ParticipantAudioConfig),
+	}
+
+	encryptionMode := ""
+	if arConfig.IsEncryptionEnabled() {
+		encryptionMode = string(arConfig.Encryption.Mode)
 	}
 
 	// Initialize manifest
@@ -352,7 +358,7 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 		p.Info.EgressId,    // sessionID (use egressID as session)
 		arConfig.Formats,   // formats
 		arConfig.SampleRate, // sampleRate
-		"",                 // encryption (none for now)
+		encryptionMode,
 	)
 
 	return arConfig
@@ -376,4 +382,12 @@ func (c *AudioRecordingConfig) SupportsFormat(format types.AudioRecordingFormat)
 // IsEncryptionEnabled returns true if encryption is enabled
 func (c *AudioRecordingConfig) IsEncryptionEnabled() bool {
 	return c.Encryption != nil && c.Encryption.Mode != EncryptionModeNone
+}
+
+func copyEncryptionConfig(in *EncryptionConfig) *EncryptionConfig {
+	if in == nil {
+		return nil
+	}
+	out := *in
+	return &out
 }

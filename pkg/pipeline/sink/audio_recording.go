@@ -26,6 +26,7 @@ import (
 	livekit "github.com/livekit/protocol/livekit"
 
 	"github.com/livekit/egress/pkg/config"
+	"github.com/livekit/egress/pkg/encryption"
 	"github.com/livekit/egress/pkg/gstreamer"
 	"github.com/livekit/egress/pkg/pipeline/sink/uploader"
 	"github.com/livekit/egress/pkg/stats"
@@ -43,7 +44,7 @@ type AudioRecordingSink struct {
 	monitor  *stats.HandlerMonitor
 	fileInfo *livekit.FileInfo // populated on close to report size/location
 
-	mu              deadlock.RWMutex
+	mu               deadlock.RWMutex
 	participantSinks map[string]*ParticipantAudioSink
 
 	// Merge job queue client (will be injected)
@@ -226,8 +227,23 @@ func (s *AudioRecordingSink) uploadParticipantConfigFiles(participantID string, 
 	for format, localPath := range pConfig.LocalFilepaths {
 		storagePath := pConfig.StorageFilepaths[format]
 
-		// Calculate checksum before upload
-		checksum, size, err := s.calculateFileChecksum(localPath)
+		// Estimate duration using original plaintext file size.
+		plainInfo, err := os.Stat(localPath)
+		if err != nil {
+			logger.Warnw("failed to stat participant audio file", err, "path", localPath)
+			continue
+		}
+		durationMs := s.estimateDurationMs(format, plainInfo.Size())
+
+		uploadPath, cleanup, err := s.prepareUploadFile(localPath)
+		if err != nil {
+			logger.Warnw("failed to prepare upload file", err, "path", localPath)
+			continue
+		}
+		defer cleanup()
+
+		// Calculate checksum for the uploaded bytes.
+		checksum, _, err := s.calculateFileChecksum(uploadPath)
 		if err != nil {
 			logger.Warnw("failed to calculate checksum", err, "path", localPath)
 			continue
@@ -235,14 +251,11 @@ func (s *AudioRecordingSink) uploadParticipantConfigFiles(participantID string, 
 
 		// Upload file
 		start := time.Now()
-		location, uploadedSize, err := s.uploader.Upload(localPath, storagePath, config.GetOutputTypeForFormat(format), false)
+		location, uploadedSize, err := s.uploader.Upload(uploadPath, storagePath, config.GetOutputTypeForFormat(format), false)
 		if err != nil {
 			logger.Errorw("failed to upload file", err, "path", localPath)
 			return totalUploaded, err
 		}
-
-		// Get file duration (approximate based on size for WAV, or use metadata)
-		durationMs := s.estimateDurationMs(format, size)
 
 		artifact := &config.AudioArtifact{
 			Format:     format,
@@ -266,6 +279,44 @@ func (s *AudioRecordingSink) uploadParticipantConfigFiles(participantID string, 
 	}
 
 	return totalUploaded, nil
+}
+
+func (s *AudioRecordingSink) prepareUploadFile(localPath string) (string, func(), error) {
+	if !s.arConf.IsEncryptionEnabled() || s.arConf.Encryption.Mode != config.EncryptionModeAES {
+		return localPath, func() {}, nil
+	}
+
+	encryptor, err := encryption.NewEnvelopeEncryptorFromBase64(s.arConf.Encryption.MasterKey)
+	if err != nil {
+		return "", nil, err
+	}
+
+	src, err := os.Open(localPath)
+	if err != nil {
+		return "", nil, err
+	}
+	defer src.Close()
+
+	encryptedPath := localPath + ".enc"
+	writer, err := encryption.NewEncryptedTempFile(encryptedPath, encryptor)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if _, err = io.Copy(writer, src); err != nil {
+		_ = writer.Close()
+		_ = os.Remove(encryptedPath)
+		return "", nil, err
+	}
+
+	if err = writer.Close(); err != nil {
+		_ = os.Remove(encryptedPath)
+		return "", nil, err
+	}
+
+	return encryptedPath, func() {
+		_ = os.Remove(encryptedPath)
+	}, nil
 }
 
 // calculateFileChecksum calculates SHA-256 checksum of a file

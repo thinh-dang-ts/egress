@@ -421,6 +421,8 @@ func (r *Runner) verifyIsolatedAudioOutput(t *testing.T, _ *testCase, info *live
 		// Verify manifest contents
 		require.Equal(t, r.RoomName, manifest.RoomName, "manifest should have correct room name")
 		require.GreaterOrEqual(t, len(manifest.Participants), expectedParticipants, "manifest should have expected participants")
+		require.Equal(t, r.expectedIsolatedAudioEncryptionMode(), manifest.Encryption,
+			"manifest encryption should match configured isolated audio encryption mode")
 
 		t.Logf("Manifest verified: %d participants, formats: %v",
 			len(manifest.Participants), manifest.Formats)
@@ -453,6 +455,13 @@ func (r *Runner) verifyIsolatedAudioOutput(t *testing.T, _ *testCase, info *live
 			r.verifyAudioFile(t, localPath)
 		}
 	}
+}
+
+func (r *Runner) expectedIsolatedAudioEncryptionMode() string {
+	if r.AudioRecordingEncryption == nil || r.AudioRecordingEncryption.Mode == config.EncryptionModeNone {
+		return ""
+	}
+	return string(r.AudioRecordingEncryption.Mode)
 }
 
 // verifyAudioFile verifies an audio file using ffprobe
