@@ -207,6 +207,7 @@ func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 	logger.Infow("merge job completed successfully",
 		"jobID", job.ID,
 		"mergedFiles", len(mergedFiles),
+		"manifestPath", job.ManifestPath,
 	)
 
 	return nil
