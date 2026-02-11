@@ -74,7 +74,7 @@ func newAudioRecordingSink(
 	o *config.AudioRecordingConfig,
 	monitor *stats.HandlerMonitor,
 ) (*AudioRecordingSink, error) {
-	u, err := uploader.New(o.StorageConfig, conf.BackupConfig, monitor, conf.Info)
+	u, err := uploader.New(o.StorageConfig, conf.BackupConfig, monitor, conf.StorageReporter, conf.Info)
 	if err != nil {
 		return nil, err
 	}

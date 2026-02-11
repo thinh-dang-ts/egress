@@ -28,14 +28,16 @@ import (
 	"google.golang.org/protobuf/proto"
 	"gopkg.in/yaml.v3"
 
-	"github.com/livekit/egress/pkg/errors"
-	"github.com/livekit/egress/pkg/pipeline/tempo"
-	"github.com/livekit/egress/pkg/types"
 	"github.com/livekit/protocol/egress"
 	"github.com/livekit/protocol/livekit"
 	"github.com/livekit/protocol/logger"
+	"github.com/livekit/protocol/observability/storageobs"
 	"github.com/livekit/protocol/rpc"
 	lksdk "github.com/livekit/server-sdk-go/v2"
+
+	"github.com/livekit/egress/pkg/errors"
+	"github.com/livekit/egress/pkg/pipeline/tempo"
+	"github.com/livekit/egress/pkg/types"
 )
 
 type PipelineConfig struct {
@@ -55,12 +57,13 @@ type PipelineConfig struct {
 
 	// IsolatedAudioRecording indicates per-participant isolated audio files
 	// Triggered by audio_only + AudioMixing_DUAL_CHANNEL_ALTERNATE
-	IsolatedAudioRecording  bool                     `yaml:"-"`
-	AudioRecordingManifest  *AudioRecordingManifest  `yaml:"-"`
-	cachedAudioRecordingCfg *AudioRecordingConfig    `yaml:"-"`
+	IsolatedAudioRecording  bool                    `yaml:"-"`
+	AudioRecordingManifest  *AudioRecordingManifest `yaml:"-"`
+	cachedAudioRecordingCfg *AudioRecordingConfig   `yaml:"-"`
 
-	Info     *livekit.EgressInfo `yaml:"-"`
-	Manifest *Manifest           `yaml:"-"`
+	Info            *livekit.EgressInfo        `yaml:"-"`
+	Manifest        *Manifest                  `yaml:"-"`
+	StorageReporter storageobs.ProjectReporter `yaml:"-"`
 }
 
 var (
@@ -138,7 +141,8 @@ func NewPipelineConfig(confString string, req *rpc.StartEgressRequest) (*Pipelin
 				Level: "info",
 			},
 		},
-		Outputs: make(map[types.EgressType][]OutputConfig),
+		Outputs:         make(map[types.EgressType][]OutputConfig),
+		StorageReporter: storageobs.NewNoopProjectReporter(),
 	}
 
 	if err := yaml.Unmarshal([]byte(confString), p); err != nil {
@@ -579,22 +583,25 @@ func (p *PipelineConfig) updateOutputType(compatibleAudioCodecs map[types.MimeTy
 	return nil
 }
 
-func (p *PipelineConfig) getRoomCompositeRequestType(req *livekit.RoomCompositeEgressRequest) types.SourceType {
-	// Test for possible chrome-less room composition for audio only
-	if !p.EnableRoomCompositeSDKSource {
-		return types.SourceTypeWeb
-	}
+// RoomCompositeUsesSDKSource reports whether a room composite request will use
+// the SDK source (no Chrome/Pulse) instead of Web
+func RoomCompositeUsesSDKSource(req *livekit.RoomCompositeEgressRequest) bool {
 	if req.Layout != "" {
-		return types.SourceTypeWeb
+		return false
 	}
 	if !req.AudioOnly {
-		return types.SourceTypeWeb
+		return false
 	}
 	if req.CustomBaseUrl != "" {
+		return false
+	}
+	return true
+}
+
+func (p *PipelineConfig) getRoomCompositeRequestType(req *livekit.RoomCompositeEgressRequest) types.SourceType {
+	if !RoomCompositeUsesSDKSource(req) {
 		return types.SourceTypeWeb
 	}
-
-	// apply audio mixing option
 	p.AudioMixing = req.AudioMixing
 
 	// Check for isolated audio recording mode
@@ -606,7 +613,6 @@ func (p *PipelineConfig) getRoomCompositeRequestType(req *livekit.RoomCompositeE
 			"audioMixing", req.AudioMixing.String(),
 		)
 	}
-
 	return types.SourceTypeSDK
 }
 
