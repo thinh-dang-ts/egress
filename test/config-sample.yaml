@@ -11,7 +11,7 @@ merge_in_process: true
 final_room_mix: true
 # Optional path prefix template for isolated audio recording artifacts.
 # Supported placeholders in this path builder: {room_name}, {room_id}, {session_id}, {time}, {utc}
-audio_recording_path_prefix: "{room_name}/{session_id}"
+audio_recording_path_prefix: "/home/egress/uploads/{room_name}/{session_id}"
 # Optional default encryption for isolated audio artifacts.
 # mode: none | s3_sse | s3_kms | gcs_cmek | aes_256
 audio_recording_encryption:

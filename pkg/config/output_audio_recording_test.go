@@ -11,6 +11,8 @@ import (
 )
 
 func TestCreateAudioRecordingConfigFromFileOutput_UsesConfiguredEncryption(t *testing.T) {
+	storageCfg := &StorageConfig{Prefix: "request-prefix"}
+
 	p := &PipelineConfig{
 		BaseConfig: BaseConfig{
 			AudioRecordingPathPrefix: "{room_name}/{session_id}",
@@ -33,6 +35,7 @@ func TestCreateAudioRecordingConfigFromFileOutput_UsesConfiguredEncryption(t *te
 				&FileConfig{
 					outputConfig:  outputConfig{OutputType: types.OutputTypeOGG},
 					LocalFilepath: "/tmp/test.ogg",
+					StorageConfig: storageCfg,
 				},
 			},
 		},
@@ -44,6 +47,7 @@ func TestCreateAudioRecordingConfigFromFileOutput_UsesConfiguredEncryption(t *te
 	require.True(t, ar.IsEncryptionEnabled())
 	require.Equal(t, EncryptionModeAES, ar.Encryption.Mode)
 	require.Equal(t, "test-master-key", ar.Encryption.MasterKey)
+	require.Same(t, storageCfg, ar.StorageConfig)
 	require.Equal(t, "{room_name}/{session_id}", ar.PathPrefix)
 	require.Equal(t, string(EncryptionModeAES), ar.AudioManifest.Encryption)
 

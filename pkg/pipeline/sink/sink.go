@@ -27,6 +27,10 @@ import (
 	lkredis "github.com/livekit/protocol/redis"
 )
 
+var newInProcessMergeEnqueuer = func(storageConfig *config.StorageConfig) (MergeJobEnqueuer, error) {
+	return merge.NewInProcessMergeEnqueuer(storageConfig)
+}
+
 type Sink interface {
 	Start() error
 	AddEOSProbe()
@@ -114,8 +118,13 @@ func (s *base) EOSReceived() bool {
 // wireMergeEnqueuer sets up the appropriate MergeJobEnqueuer on the AudioRecordingSink
 // based on the MergeInProcess config flag.
 func wireMergeEnqueuer(s *AudioRecordingSink, conf *config.PipelineConfig) {
+	storageConfig := conf.StorageConfig
+	if s != nil && s.arConf != nil && s.arConf.StorageConfig != nil {
+		storageConfig = s.arConf.StorageConfig
+	}
+
 	if conf.MergeInProcess {
-		enqueuer, err := merge.NewInProcessMergeEnqueuer(conf.StorageConfig)
+		enqueuer, err := newInProcessMergeEnqueuer(storageConfig)
 		if err != nil {
 			logger.Errorw("failed to create in-process merge enqueuer", err)
 			return

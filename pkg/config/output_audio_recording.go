@@ -341,6 +341,7 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 		Formats:            formats,
 		SampleRate:         sampleRate,
 		Encryption:         copyEncryptionConfig(p.AudioRecordingEncryption),
+		StorageConfig:      fileConfig.StorageConfig,
 		PathPrefix:         p.AudioRecordingPathPrefix,
 		LocalDir:           localDir,
 		ParticipantConfigs: make(map[string]*ParticipantAudioConfig),
