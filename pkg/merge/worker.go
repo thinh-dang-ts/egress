@@ -27,6 +27,7 @@ import (
 	"os"
 	"os/exec"
 	"path"
+	"sort"
 	"strings"
 	"time"
 	"unicode"
@@ -296,7 +297,7 @@ func (w *MergeWorker) mergeTracks(ctx context.Context, manifest *config.AudioRec
 	mergedFiles := make(map[types.AudioRecordingFormat]string)
 
 	// Build GStreamer pipeline for merging
-	// Pipeline: filesrc -> decoder -> identity(ts-offset) -> audiomixer -> encoder -> filesink
+	// Pipeline: filesrc -> decoder -> identity(ts-offset) -> interleave -> encoder -> filesink
 	for _, format := range manifest.Formats {
 		outputPath := path.Join(tmpDir, fmt.Sprintf("room_mix%s", config.GetFileExtensionForFormat(format)))
 
@@ -313,8 +314,8 @@ func (w *MergeWorker) mergeTracks(ctx context.Context, manifest *config.AudioRec
 // runMergePipeline runs the GStreamer merge pipeline
 func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map[string]string, alignment *AlignmentResult, format types.AudioRecordingFormat, outputPath string, sampleRate int32) error {
 	// Build gst-launch command for merging
-	// For each participant: filesrc ! decodebin ! audioconvert ! audioresample ! identity ts-offset=X ! audiomixer.
-	// audiomixer ! audioconvert ! audioresample ! encoder ! filesink
+	// For each participant: filesrc ! decodebin ! audioconvert ! audioresample ! identity ts-offset=X ! interleave.
+	// interleave ! audioconvert ! audioresample ! encoder ! filesink
 
 	args := []string{"-e"} // Send EOS on interrupt
 	encodeSampleRate := sampleRate
@@ -322,16 +323,23 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 		encodeSampleRate = nearestOpusRate(sampleRate)
 	}
 
-	// Add mixer input for each participant
-	for participantID, filePath := range participantFiles {
-		// Find alignment for this participant
-		var offset int64
+	participantOrder := orderedParticipantIDs(participantFiles, alignment)
+	if len(participantOrder) == 0 {
+		return errors.New("no participant files to merge")
+	}
+
+	offsetByParticipant := make(map[string]int64, len(participantOrder))
+	if alignment != nil {
 		for _, a := range alignment.Alignments {
-			if a.ParticipantID == participantID {
-				offset = a.GetIdentityTsOffset()
-				break
-			}
+			offsetByParticipant[a.ParticipantID] = a.GetIdentityTsOffset()
 		}
+	}
+
+	// Add one mono source chain for each participant. Interleave maps each input
+	// to its own output channel in the order we connect the pads.
+	for _, participantID := range participantOrder {
+		filePath := participantFiles[participantID]
+		offset := offsetByParticipant[participantID]
 
 		// Add source chain for this participant
 		args = append(args,
@@ -339,18 +347,19 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 			"decodebin", "!",
 			"audioconvert", "!",
 			"audioresample", "!",
-			fmt.Sprintf("audio/x-raw,rate=%d,channels=2", sampleRate), "!",
+			fmt.Sprintf("audio/x-raw,rate=%d,channels=1,format=S16LE", sampleRate), "!",
 			"identity", fmt.Sprintf("ts-offset=%d", offset), "!",
-			"audiomixer.",
+			"queue", "!",
+			"interleave.",
 		)
 	}
 
-	// Add mixer and output chain
+	// Add interleave and output chain
 	args = append(args,
-		"audiomixer", "name=audiomixer", "!",
+		"interleave", "name=interleave", "!",
 		"audioconvert", "!",
 		"audioresample", "!",
-		fmt.Sprintf("audio/x-raw,rate=%d,channels=2,format=S16LE", encodeSampleRate), "!",
+		fmt.Sprintf("audio/x-raw,rate=%d,channels=%d,format=S16LE", encodeSampleRate, len(participantOrder)), "!",
 	)
 
 	// Add encoder based on format
@@ -368,13 +377,42 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	logger.Debugw("running merge pipeline", "args", args)
+	logger.Debugw("running merge pipeline", "args", args, "participants", participantOrder, "channels", len(participantOrder))
 
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("gst-launch failed: %w", err)
 	}
 
 	return nil
+}
+
+func orderedParticipantIDs(participantFiles map[string]string, alignment *AlignmentResult) []string {
+	ordered := make([]string, 0, len(participantFiles))
+	seen := make(map[string]struct{}, len(participantFiles))
+
+	if alignment != nil {
+		for _, a := range alignment.Alignments {
+			if _, ok := participantFiles[a.ParticipantID]; !ok {
+				continue
+			}
+			if _, ok := seen[a.ParticipantID]; ok {
+				continue
+			}
+			ordered = append(ordered, a.ParticipantID)
+			seen[a.ParticipantID] = struct{}{}
+		}
+	}
+
+	remaining := make([]string, 0, len(participantFiles)-len(ordered))
+	for participantID := range participantFiles {
+		if _, ok := seen[participantID]; ok {
+			continue
+		}
+		remaining = append(remaining, participantID)
+	}
+	sort.Strings(remaining)
+
+	return append(ordered, remaining...)
 }
 
 func nearestOpusRate(sampleRate int32) int32 {

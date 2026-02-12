@@ -89,9 +89,9 @@ func (r *Runner) testIsolatedAudioRecording(t *testing.T) {
 				custom: r.testIsolatedAudioJoinLeave,
 			},
 
-			// Isolated audio recording with in-process merge to stereo
+			// Isolated audio recording with in-process merge (one channel per participant)
 			{
-				name:        "IsolatedAudio_MergeToStereo",
+				name:        "IsolatedAudio_MergePerParticipantChannel",
 				requestType: types.RequestTypeRoomComposite,
 				publishOptions: publishOptions{
 					audioOnly:   true,
@@ -101,7 +101,7 @@ func (r *Runner) testIsolatedAudioRecording(t *testing.T) {
 					filename: "isolated_audio_merge_{time}",
 					fileType: livekit.EncodedFileType_OGG,
 				},
-				custom: r.testIsolatedAudioMergeToStereo,
+				custom: r.testIsolatedAudioMergePerParticipantChannel,
 			},
 		} {
 			if r.Short {
@@ -168,6 +168,7 @@ func (r *Runner) testIsolatedAudioTwoParticipants(t *testing.T, test *testCase) 
 
 	// Verify the result
 	r.verifyIsolatedAudioOutput(t, test, info, 2, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 2)
 }
 
 // testIsolatedAudioThreeParticipants tests isolated recording with 3 participants
@@ -211,6 +212,7 @@ func (r *Runner) testIsolatedAudioThreeParticipants(t *testing.T, test *testCase
 
 	// Verify the result
 	r.verifyIsolatedAudioOutput(t, test, info, 3, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 3)
 }
 
 // testIsolatedAudioJoinLeave tests isolated recording when participants join and leave
@@ -263,10 +265,11 @@ func (r *Runner) testIsolatedAudioJoinLeave(t *testing.T, test *testCase) {
 
 	// Verify the result - should have 2 participant files
 	r.verifyIsolatedAudioOutput(t, test, info, 2, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 2)
 }
 
-// testIsolatedAudioMergeToStereo tests that 2 participant recordings are merged into a stereo file
-func (r *Runner) testIsolatedAudioMergeToStereo(t *testing.T, test *testCase) {
+// testIsolatedAudioMergePerParticipantChannel tests that merged output maps one channel per participant
+func (r *Runner) testIsolatedAudioMergePerParticipantChannel(t *testing.T, test *testCase) {
 	// Connect first participant
 	p1, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
 		APIKey:              r.ApiKey,
@@ -315,16 +318,17 @@ func (r *Runner) testIsolatedAudioMergeToStereo(t *testing.T, test *testCase) {
 	r.verifyIsolatedAudioOutput(t, test, info, 2, storageConfig)
 
 	// Verify the merged output
-	r.verifyMergedAudioOutput(t, info, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 2)
 }
 
 // verifyMergedAudioOutput verifies the merged room mix audio output
-func (r *Runner) verifyMergedAudioOutput(t *testing.T, info *livekit.EgressInfo, storageConfig *config.StorageConfig) {
+func (r *Runner) verifyMergedAudioOutput(t *testing.T, info *livekit.EgressInfo, storageConfig *config.StorageConfig, expectedChannels int) {
 	require.Equal(t, livekit.EgressStatus_EGRESS_COMPLETE, info.Status)
 	manifest, _ := r.loadIsolatedAudioManifest(t, info, storageConfig)
 	require.NotNil(t, manifest, "manifest should be present")
 	require.NotNil(t, manifest.RoomMix, "manifest should have room_mix section")
 	require.Equal(t, config.AudioRecordingStatusCompleted, manifest.RoomMix.Status, "room_mix status should be completed")
+	require.Greater(t, expectedChannels, 0, "expected merged channel count should be positive")
 
 	t.Logf("Merge completed: status=%s, artifacts=%d", manifest.RoomMix.Status, len(manifest.RoomMix.Artifacts))
 
@@ -368,7 +372,7 @@ func (r *Runner) verifyMergedAudioOutput(t *testing.T, info *livekit.EgressInfo,
 				t.Logf("Merged audio: codec=%s, sample_rate=%s, channels=%d",
 					stream.CodecName, stream.SampleRate, stream.Channels)
 				require.Equal(t, "opus", stream.CodecName, "merged file should use opus codec")
-				require.Equal(t, 2, stream.Channels, "merged file should have 2 channels (stereo)")
+				require.Equal(t, expectedChannels, stream.Channels, "merged file should have one channel per participant")
 			}
 		}
 		require.True(t, hasAudio, "merged file should contain audio stream")

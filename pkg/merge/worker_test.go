@@ -441,11 +441,66 @@ func TestRunMergePipelineUsesNearestOpusRate(t *testing.T) {
 		t.Fatalf("failed to read gst log: %v", err)
 	}
 	logText := string(argsLog)
-	if !strings.Contains(logText, "audio/x-raw,rate=48000,channels=2,format=S16LE") {
+	if !strings.Contains(logText, "audio/x-raw,rate=48000,channels=1,format=S16LE") {
 		t.Fatalf("expected adjusted opus sample rate in args, got: %s", logText)
+	}
+	if !strings.Contains(logText, "interleave name=interleave !") {
+		t.Fatalf("expected interleave output chain in args, got: %s", logText)
 	}
 	if !strings.Contains(logText, "opusenc ! oggmux !") {
 		t.Fatalf("expected opus/ogg encoder chain in args, got: %s", logText)
+	}
+	if _, err = os.Stat(outPath); err != nil {
+		t.Fatalf("expected output file to be written: %v", err)
+	}
+}
+
+func TestRunMergePipelineUsesAlignmentOrderForChannels(t *testing.T) {
+	logPath := installFakeGstLaunch(t)
+
+	w := &MergeWorker{}
+	alignment := &AlignmentResult{
+		Alignments: []*AlignmentInfo{
+			{ParticipantID: "p2", Offset: 20 * time.Millisecond},
+			{ParticipantID: "p1", Offset: 10 * time.Millisecond},
+		},
+	}
+	outPath := path.Join(t.TempDir(), "room_mix.wav")
+	err := w.runMergePipeline(
+		context.Background(),
+		map[string]string{
+			"p1": "/tmp/p1.ogg",
+			"p2": "/tmp/p2.ogg",
+		},
+		alignment,
+		types.AudioRecordingFormatWAVPCM,
+		outPath,
+		32000,
+	)
+	if err != nil {
+		t.Fatalf("runMergePipeline() error = %v", err)
+	}
+
+	argsLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read gst log: %v", err)
+	}
+	logText := string(argsLog)
+
+	idxP2 := strings.Index(logText, "location=/tmp/p2.ogg")
+	idxP1 := strings.Index(logText, "location=/tmp/p1.ogg")
+	if idxP2 < 0 || idxP1 < 0 {
+		t.Fatalf("expected both participant inputs in args, got: %s", logText)
+	}
+	if idxP2 >= idxP1 {
+		t.Fatalf("expected p2 to appear before p1 following alignment order, got: %s", logText)
+	}
+
+	if !strings.Contains(logText, "audio/x-raw,rate=32000,channels=2,format=S16LE") {
+		t.Fatalf("expected 2-channel output caps in args, got: %s", logText)
+	}
+	if !strings.Contains(logText, "interleave name=interleave !") {
+		t.Fatalf("expected interleave output chain in args, got: %s", logText)
 	}
 	if _, err = os.Stat(outPath); err != nil {
 		t.Fatalf("expected output file to be written: %v", err)
