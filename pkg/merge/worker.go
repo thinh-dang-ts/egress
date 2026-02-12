@@ -338,18 +338,56 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 
 	// Add one mono source chain for each participant. Interleave maps each input
 	// to its own output channel in the order we connect the pads.
-	for _, participantID := range participantOrder {
+	//
+	// NOTE: interleave in some GStreamer builds will not honor delayed stream
+	// starts from ts-offset alone (it can align all streams to the first common
+	// timestamp). To preserve timeline offsets reliably, prepend explicit silence
+	// on each participant branch before interleave.
+	silenceBufferDur := 20 * time.Millisecond
+	silenceBufferNs := int64(silenceBufferDur)
+	samplesPerBuffer := int((sampleRate * int32(silenceBufferDur/time.Millisecond)) / 1000)
+	if samplesPerBuffer <= 0 {
+		samplesPerBuffer = 1
+	}
+	for i, participantID := range participantOrder {
 		filePath := participantFiles[participantID]
 		offset := offsetByParticipant[participantID]
 
-		// Add source chain for this participant
+		if offset > 0 {
+			silenceBuffers := (offset + silenceBufferNs - 1) / silenceBufferNs
+			concatName := fmt.Sprintf("concat_%d", i)
+
+			// Silence branch + media branch merged sequentially via concat.
+			args = append(args,
+				"audiotestsrc", "wave=silence",
+				fmt.Sprintf("num-buffers=%d", silenceBuffers),
+				fmt.Sprintf("samplesperbuffer=%d", samplesPerBuffer), "!",
+				fmt.Sprintf("audio/x-raw,rate=%d,channels=1,format=S16LE", sampleRate), "!",
+				"queue", "!",
+				fmt.Sprintf("%s.", concatName),
+
+				"filesrc", fmt.Sprintf("location=%s", filePath), "!",
+				"decodebin", "!",
+				"audioconvert", "!",
+				"audioresample", "!",
+				fmt.Sprintf("audio/x-raw,rate=%d,channels=1,format=S16LE", sampleRate), "!",
+				"queue", "!",
+				fmt.Sprintf("%s.", concatName),
+
+				"concat", fmt.Sprintf("name=%s", concatName), "!",
+				"queue", "!",
+				"interleave.",
+			)
+			continue
+		}
+
+		// Add source chain for this participant (no offset)
 		args = append(args,
 			"filesrc", fmt.Sprintf("location=%s", filePath), "!",
 			"decodebin", "!",
 			"audioconvert", "!",
 			"audioresample", "!",
 			fmt.Sprintf("audio/x-raw,rate=%d,channels=1,format=S16LE", sampleRate), "!",
-			"identity", fmt.Sprintf("ts-offset=%d", offset), "!",
 			"queue", "!",
 			"interleave.",
 		)
