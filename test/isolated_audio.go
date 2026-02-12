@@ -103,6 +103,22 @@ func (r *Runner) testIsolatedAudioRecording(t *testing.T) {
 				},
 				custom: r.testIsolatedAudioMergePerParticipantChannel,
 			},
+
+			// Isolated audio recording with staggered participant joins.
+			// Verifies merged channel count and join-based offset/order in manifest timeline.
+			{
+				name:        "IsolatedAudio_StaggeredJoinOffsetsOrder",
+				requestType: types.RequestTypeRoomComposite,
+				publishOptions: publishOptions{
+					audioOnly:   true,
+					audioMixing: livekit.AudioMixing_DUAL_CHANNEL_ALTERNATE,
+				},
+				fileOptions: &fileOptions{
+					filename: "isolated_audio_staggered_join_{time}",
+					fileType: livekit.EncodedFileType_OGG,
+				},
+				custom: r.testIsolatedAudioStaggeredJoinOffsetsOrder,
+			},
 		} {
 			if r.Short {
 				// In short mode, only run the first test
@@ -321,6 +337,71 @@ func (r *Runner) testIsolatedAudioMergePerParticipantChannel(t *testing.T, test 
 	r.verifyMergedAudioOutput(t, info, storageConfig, 2)
 }
 
+// testIsolatedAudioStaggeredJoinOffsetsOrder validates merge timeline behavior when
+// participants join at staggered times during an active recording.
+func (r *Runner) testIsolatedAudioStaggeredJoinOffsetsOrder(t *testing.T, test *testCase) {
+	p1Identity := fmt.Sprintf("stagger-join-p1-%d", rand.Intn(100000))
+	p2Identity := fmt.Sprintf("stagger-join-p2-%d", rand.Intn(100000))
+	p3Identity := fmt.Sprintf("stagger-join-p3-%d", rand.Intn(100000))
+
+	// Connect participant 1 and start publishing before recording starts.
+	p1, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "stagger-join-p1",
+		ParticipantIdentity: p1Identity,
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p1.Disconnect)
+	p1TrackID := r.publish(t, p1.LocalParticipant, types.MimeTypeOpus, make(chan struct{})).SID()
+
+	time.Sleep(1 * time.Second)
+
+	// Start recording with only participant 1 present.
+	req := r.build(test)
+	storageConfig := r.getIsolatedAudioStorageConfig(t, req)
+	info := r.sendRequest(t, req)
+	egressID := info.EgressId
+
+	// Participant 2 joins after 2 seconds.
+	time.Sleep(2 * time.Second)
+	p2, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "stagger-join-p2",
+		ParticipantIdentity: p2Identity,
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p2.Disconnect)
+	p2TrackID := r.publish(t, p2.LocalParticipant, types.MimeTypeOpus, make(chan struct{})).SID()
+
+	// Participant 3 joins 3 seconds after participant 2.
+	time.Sleep(3 * time.Second)
+	p3, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "stagger-join-p3",
+		ParticipantIdentity: p3Identity,
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p3.Disconnect)
+	p3TrackID := r.publish(t, p3.LocalParticipant, types.MimeTypeOpus, make(chan struct{})).SID()
+
+	// Keep recording running long enough to capture all three tracks.
+	time.Sleep(10 * time.Second)
+
+	r.checkUpdate(t, egressID, livekit.EgressStatus_EGRESS_ACTIVE)
+
+	info = r.stopEgress(t, egressID)
+
+	r.verifyIsolatedAudioOutput(t, test, info, 3, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 3)
+	r.verifyStaggeredJoinTimelineAndMerge(t, info, storageConfig, p1TrackID, p2TrackID, p3TrackID, 2*time.Second, 3*time.Second)
+}
+
 // verifyMergedAudioOutput verifies the merged room mix audio output
 func (r *Runner) verifyMergedAudioOutput(t *testing.T, info *livekit.EgressInfo, storageConfig *config.StorageConfig, expectedChannels int) {
 	require.Equal(t, livekit.EgressStatus_EGRESS_COMPLETE, info.Status)
@@ -385,6 +466,147 @@ func (r *Runner) verifyMergedAudioOutput(t *testing.T, info *livekit.EgressInfo,
 			t.Logf("Merged duration: %v", dur)
 		}
 	}
+}
+
+func (r *Runner) verifyStaggeredJoinTimelineAndMerge(
+	t *testing.T,
+	info *livekit.EgressInfo,
+	storageConfig *config.StorageConfig,
+	p1TrackID string,
+	p2TrackID string,
+	p3TrackID string,
+	expectedDelay12 time.Duration,
+	expectedDelay23 time.Duration,
+) {
+	manifest, _ := r.loadIsolatedAudioManifest(t, info, storageConfig)
+	require.NotNil(t, manifest)
+	require.NotNil(t, manifest.RoomMix)
+	require.Equal(t, int32(3), manifest.ChannelCount, "manifest channel_count should match participant channels")
+
+	p1 := findParticipantByTrackID(manifest, p1TrackID)
+	p2 := findParticipantByTrackID(manifest, p2TrackID)
+	p3 := findParticipantByTrackID(manifest, p3TrackID)
+	require.NotNil(t, p1, "participant 1 should be present in manifest")
+	require.NotNil(t, p2, "participant 2 should be present in manifest")
+	require.NotNil(t, p3, "participant 3 should be present in manifest")
+
+	require.Greater(t, p1.JoinedAt, int64(0))
+	require.Greater(t, p2.JoinedAt, int64(0))
+	require.Greater(t, p3.JoinedAt, int64(0))
+
+	require.Less(t, p1.JoinedAt, p2.JoinedAt, "participant 1 should join before participant 2")
+	require.Less(t, p2.JoinedAt, p3.JoinedAt, "participant 2 should join before participant 3")
+
+	delay12 := time.Duration(p2.JoinedAt - p1.JoinedAt)
+	delay23 := time.Duration(p3.JoinedAt - p2.JoinedAt)
+	require.InDelta(t, expectedDelay12.Seconds(), delay12.Seconds(), 1.5, "join delay p1->p2 should be about 2 seconds")
+	require.InDelta(t, expectedDelay23.Seconds(), delay23.Seconds(), 1.5, "join delay p2->p3 should be about 3 seconds")
+
+	mergeStart1 := participantMergeStartNs(p1)
+	mergeStart2 := participantMergeStartNs(p2)
+	mergeStart3 := participantMergeStartNs(p3)
+	require.Greater(t, mergeStart1, int64(0))
+	require.Greater(t, mergeStart2, int64(0))
+	require.Greater(t, mergeStart3, int64(0))
+	require.Less(t, mergeStart1, mergeStart2, "merge start order should keep p1 before p2")
+	require.Less(t, mergeStart2, mergeStart3, "merge start order should keep p2 before p3")
+
+	expectedTotalNs := expectedMergedTimelineDurationNs([]*config.ParticipantRecordingInfo{p1, p2, p3})
+	if expectedTotalNs <= 0 {
+		return
+	}
+
+	var mergedPath string
+	for _, artifact := range manifest.RoomMix.Artifacts {
+		mergedPath = r.materializeAudioArtifact(t, storageConfig, info.EgressId, artifact.StorageURI)
+		if mergedPath != "" {
+			break
+		}
+	}
+	if mergedPath == "" {
+		return
+	}
+
+	probeInfo, err := ffprobe(mergedPath)
+	require.NoError(t, err)
+	require.NotNil(t, probeInfo)
+	if probeInfo.Format.Duration == "" {
+		return
+	}
+
+	actualDur, err := parseFFProbeDuration(probeInfo.Format.Duration)
+	require.NoError(t, err)
+	require.InDelta(t, time.Duration(expectedTotalNs).Seconds(), actualDur.Seconds(), 2.0,
+		"merged duration should follow join-based timeline offsets")
+}
+
+func findParticipantByTrackID(manifest *config.AudioRecordingManifest, trackID string) *config.ParticipantRecordingInfo {
+	for _, p := range manifest.Participants {
+		if p.TrackID == trackID || p.ParticipantID == trackID {
+			return p
+		}
+	}
+	return nil
+}
+
+func participantMergeStartNs(p *config.ParticipantRecordingInfo) int64 {
+	if p == nil {
+		return 0
+	}
+	if p.ClockSync != nil && p.ClockSync.ServerTimestamp > 0 {
+		return p.ClockSync.ServerTimestamp
+	}
+	return p.JoinedAt
+}
+
+func expectedMergedTimelineDurationNs(participants []*config.ParticipantRecordingInfo) int64 {
+	if len(participants) == 0 {
+		return 0
+	}
+
+	referenceStart := int64(0)
+	for _, p := range participants {
+		if p == nil || p.JoinedAt <= 0 {
+			continue
+		}
+		if referenceStart == 0 || p.JoinedAt < referenceStart {
+			referenceStart = p.JoinedAt
+		}
+	}
+	if referenceStart == 0 {
+		return 0
+	}
+
+	maxEndNs := int64(0)
+	for _, p := range participants {
+		if p == nil {
+			continue
+		}
+
+		offsetNs := int64(0)
+		if p.JoinedAt > referenceStart {
+			offsetNs = p.JoinedAt - referenceStart
+		}
+
+		durNs := int64(0)
+		if p.LeftAt > p.JoinedAt {
+			durNs = p.LeftAt - p.JoinedAt
+		}
+		if durNs == 0 {
+			for _, artifact := range p.Artifacts {
+				if artifact.DurationMs > 0 {
+					durNs = artifact.DurationMs * int64(time.Millisecond)
+					break
+				}
+			}
+		}
+
+		if endNs := offsetNs + durNs; endNs > maxEndNs {
+			maxEndNs = endNs
+		}
+	}
+
+	return maxEndNs
 }
 
 // verifyIsolatedAudioOutput verifies the output of isolated audio recording
