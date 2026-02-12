@@ -5,6 +5,18 @@ api_key: '****'
 api_secret: '****'
 ws_url: 'wss://your.livekit.url'
 file_prefix: /out/output
+
+# Isolated audio recording behavior (RoomComposite + audio_only + DUAL_CHANNEL_ALTERNATE)
+merge_in_process: true
+final_room_mix: true
+# Optional path prefix template for isolated audio recording artifacts.
+# Supported placeholders in this path builder: {room_name}, {room_id}, {session_id}, {time}, {utc}
+audio_recording_path_prefix: "{room_name}/{session_id}"
+# Optional default encryption for isolated audio artifacts.
+# mode: none | s3_sse | s3_kms | gcs_cmek | aes_256
+audio_recording_encryption:
+  mode: none
+  # master_key: 'BASE64_32_BYTE_KEY' # required when mode=aes_256
 s3:
   access_key: '****'
   secret: '****'

@@ -253,7 +253,7 @@ func (s *AudioRecordingSink) uploadParticipantConfigFiles(participantID string, 
 		start := time.Now()
 		location, uploadedSize, err := s.uploader.Upload(uploadPath, storagePath, config.GetOutputTypeForFormat(format), false)
 		if err != nil {
-			logger.Errorw("failed to upload file", err, "path", localPath)
+			logger.Errorw("failed to upload file", err, "path", localPath, "storagePath", storagePath, "outputType", config.GetOutputTypeForFormat(format), "uploadPath", uploadPath)
 			return totalUploaded, err
 		}
 

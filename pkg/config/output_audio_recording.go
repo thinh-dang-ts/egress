@@ -30,18 +30,18 @@ type EncryptionMode string
 
 const (
 	EncryptionModeNone   EncryptionMode = "none"
-	EncryptionModeS3SSE  EncryptionMode = "s3_sse"     // S3 Server-Side Encryption (SSE-S3)
-	EncryptionModeS3KMS  EncryptionMode = "s3_kms"     // S3 SSE with KMS (SSE-KMS)
-	EncryptionModeGCSCMK EncryptionMode = "gcs_cmek"   // GCS Customer-Managed Encryption Key
-	EncryptionModeAES    EncryptionMode = "aes_256"    // AES-256-GCM envelope encryption for local storage
+	EncryptionModeS3SSE  EncryptionMode = "s3_sse"   // S3 Server-Side Encryption (SSE-S3)
+	EncryptionModeS3KMS  EncryptionMode = "s3_kms"   // S3 SSE with KMS (SSE-KMS)
+	EncryptionModeGCSCMK EncryptionMode = "gcs_cmek" // GCS Customer-Managed Encryption Key
+	EncryptionModeAES    EncryptionMode = "aes_256"  // AES-256-GCM envelope encryption for local storage
 )
 
 // EncryptionConfig specifies encryption settings for audio recordings
 type EncryptionConfig struct {
-	Mode       EncryptionMode `yaml:"mode" json:"mode"`
-	KMSKeyID   string         `yaml:"kms_key_id,omitempty" json:"kms_key_id,omitempty"`       // For S3 SSE-KMS
-	CMEKKeyName string        `yaml:"cmek_key_name,omitempty" json:"cmek_key_name,omitempty"` // For GCS CMEK
-	MasterKey  string         `yaml:"master_key,omitempty" json:"master_key,omitempty"`       // For local AES encryption (base64 encoded)
+	Mode        EncryptionMode `yaml:"mode" json:"mode"`
+	KMSKeyID    string         `yaml:"kms_key_id,omitempty" json:"kms_key_id,omitempty"`       // For S3 SSE-KMS
+	CMEKKeyName string         `yaml:"cmek_key_name,omitempty" json:"cmek_key_name,omitempty"` // For GCS CMEK
+	MasterKey   string         `yaml:"master_key,omitempty" json:"master_key,omitempty"`       // For local AES encryption (base64 encoded)
 }
 
 // AudioRecordingConfig contains configuration for audio-only recording
@@ -53,10 +53,10 @@ type AudioRecordingConfig struct {
 	SessionID string `yaml:"session_id" json:"session_id"`
 
 	// Recording options
-	IsolatedTracks bool                       `yaml:"isolated_tracks" json:"isolated_tracks"` // Record each participant separately (default: true)
-	FinalRoomMix   bool                       `yaml:"final_room_mix" json:"final_room_mix"`   // Generate offline-mixed room audio (default: false)
-	Formats        []types.AudioRecordingFormat `yaml:"formats" json:"formats"`               // Output formats (ogg_opus, wav_pcm)
-	SampleRate     int32                      `yaml:"sample_rate" json:"sample_rate"`         // 8000, 16000, 24000, 32000, 44100, 48000
+	IsolatedTracks bool                         `yaml:"isolated_tracks" json:"isolated_tracks"` // Record each participant separately (default: true)
+	FinalRoomMix   bool                         `yaml:"final_room_mix" json:"final_room_mix"`   // Generate offline-mixed room audio (default: false)
+	Formats        []types.AudioRecordingFormat `yaml:"formats" json:"formats"`                 // Output formats (ogg_opus, wav_pcm)
+	SampleRate     int32                        `yaml:"sample_rate" json:"sample_rate"`         // 8000, 16000, 24000, 32000, 44100, 48000
 
 	// Encryption settings
 	Encryption *EncryptionConfig `yaml:"encryption,omitempty" json:"encryption,omitempty"`
@@ -77,14 +77,14 @@ type AudioRecordingConfig struct {
 
 // ParticipantAudioConfig holds per-participant recording configuration
 type ParticipantAudioConfig struct {
-	ParticipantID       string            `json:"participant_id"`
-	ParticipantIdentity string            `json:"participant_identity"`
-	TrackID             string            `json:"track_id"`
+	ParticipantID       string                                `json:"participant_id"`
+	ParticipantIdentity string                                `json:"participant_identity"`
+	TrackID             string                                `json:"track_id"`
 	LocalFilepaths      map[types.AudioRecordingFormat]string `json:"-"` // Format -> local filepath
 	StorageFilepaths    map[types.AudioRecordingFormat]string `json:"-"` // Format -> storage filepath
-	JoinedAt            int64             `json:"joined_at"`
-	LeftAt              int64             `json:"left_at,omitempty"`
-	ClockSyncInfo       *ClockSyncInfo    `json:"clock_sync_info,omitempty"`
+	JoinedAt            int64                                 `json:"joined_at"`
+	LeftAt              int64                                 `json:"left_at,omitempty"`
+	ClockSyncInfo       *ClockSyncInfo                        `json:"clock_sync_info,omitempty"`
 }
 
 // ClockSyncInfo stores timing information for offline alignment
@@ -341,6 +341,7 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 		Formats:            formats,
 		SampleRate:         sampleRate,
 		Encryption:         copyEncryptionConfig(p.AudioRecordingEncryption),
+		PathPrefix:         p.AudioRecordingPathPrefix,
 		LocalDir:           localDir,
 		ParticipantConfigs: make(map[string]*ParticipantAudioConfig),
 	}
@@ -352,11 +353,11 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 
 	// Initialize manifest
 	arConfig.AudioManifest = NewAudioRecordingManifest(
-		p.Info.EgressId,    // egressID
-		p.Info.RoomId,      // roomID
-		p.Info.RoomName,    // roomName
-		p.Info.EgressId,    // sessionID (use egressID as session)
-		arConfig.Formats,   // formats
+		p.Info.EgressId,     // egressID
+		p.Info.RoomId,       // roomID
+		p.Info.RoomName,     // roomName
+		p.Info.EgressId,     // sessionID (use egressID as session)
+		arConfig.Formats,    // formats
 		arConfig.SampleRate, // sampleRate
 		encryptionMode,
 	)

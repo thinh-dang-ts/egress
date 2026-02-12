@@ -60,6 +60,8 @@ type BaseConfig struct {
 
 	MergeInProcess bool `yaml:"merge_in_process"` // run merge in handler process instead of separate worker (env MERGE_IN_PROCESS)
 	FinalRoomMix   bool `yaml:"final_room_mix"`   // enable offline room mix generation after isolated recording (env FINAL_ROOM_MIX)
+	// Optional path prefix template for isolated audio recording artifacts.
+	AudioRecordingPathPrefix string `yaml:"audio_recording_path_prefix,omitempty"`
 	// Optional encryption defaults for isolated audio recording mode.
 	AudioRecordingEncryption *EncryptionConfig `yaml:"audio_recording_encryption,omitempty"`
 
@@ -95,7 +97,7 @@ type LatencyConfig struct {
 	RTPMaxAllowedTsDiff             time.Duration `ymal:"rtp_max_allowed_ts_diff"`                       // max allowed PTS discont. for a RTP stream, before applying PTS alignment
 	RTPMaxDriftAdjustment           time.Duration `ymal:"rtp_max_drift_adjustment,omitempty"`            // max allowed drift adjustment for a RTP stream
 	RTPDriftAdjustmentWindowPercent float64       `ymal:"rtp_drift_adjustment_window_percent,omitempty"` // how much to throttle drift adjustment, 0.0 disables it
-	OldPacketThreshold time.Duration `yaml:"old_packet_threshold,omitempty"` // syncrhonizer drops packets older than this, 0 to disable packet drops
+	OldPacketThreshold              time.Duration `yaml:"old_packet_threshold,omitempty"`                // syncrhonizer drops packets older than this, 0 to disable packet drops
 }
 
 type AudioTempoController struct {
