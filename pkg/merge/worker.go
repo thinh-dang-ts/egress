@@ -29,6 +29,7 @@ import (
 	"path"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/redis/go-redis/v9"
 
@@ -402,6 +403,7 @@ func absInt32(n int32) int32 {
 // uploadMergedFiles uploads the merged files to storage
 func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.AudioRecordingManifest, mergedFiles map[types.AudioRecordingFormat]string, manifestPath string) error {
 	manifest.InitRoomMix()
+	remoteManifestPath := w.normalizeRemotePath(manifestPath)
 
 	for format, localPath := range mergedFiles {
 		// Calculate checksum
@@ -411,11 +413,8 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 		}
 
 		// Build storage path
-		storagePath := fmt.Sprintf("%s/%s/room_mix%s",
-			manifest.RoomName,
-			manifest.SessionID,
-			config.GetFileExtensionForFormat(format),
-		)
+		mixedFilename := mixedAudioFilename(manifest.RoomName, format)
+		storagePath := path.Join(path.Dir(remoteManifestPath), mixedFilename)
 
 		// Upload or copy to final location
 		location := storagePath
@@ -427,7 +426,7 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 			location = uploadedLocation
 		} else {
 			// Local storage: copy merged file next to manifest
-			destPath := path.Join(path.Dir(manifestPath), fmt.Sprintf("room_mix%s", config.GetFileExtensionForFormat(format)))
+			destPath := path.Join(path.Dir(manifestPath), mixedFilename)
 			if err := copyFile(localPath, destPath); err != nil {
 				return fmt.Errorf("failed to copy merged file: %w", err)
 			}
@@ -449,6 +448,39 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 
 	manifest.SetRoomMixStatus(config.AudioRecordingStatusCompleted, "")
 	return nil
+}
+
+func mixedAudioFilename(roomName string, format types.AudioRecordingFormat) string {
+	return fmt.Sprintf("room_mix_%s%s", sanitizeFilenameComponent(roomName), config.GetFileExtensionForFormat(format))
+}
+
+func sanitizeFilenameComponent(s string) string {
+	if s == "" {
+		return "room"
+	}
+
+	var b strings.Builder
+	b.Grow(len(s))
+
+	prevUnderscore := false
+	for _, r := range s {
+		if unicode.IsLetter(r) || unicode.IsNumber(r) || r == '-' || r == '_' {
+			b.WriteRune(r)
+			prevUnderscore = false
+			continue
+		}
+
+		if !prevUnderscore {
+			b.WriteByte('_')
+			prevUnderscore = true
+		}
+	}
+
+	out := strings.Trim(b.String(), "_")
+	if out == "" {
+		return "room"
+	}
+	return out
 }
 
 // calculateChecksum calculates SHA-256 checksum of a file

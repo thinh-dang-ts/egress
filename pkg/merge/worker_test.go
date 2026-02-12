@@ -215,6 +215,37 @@ func TestMergedManifestObjectKey(t *testing.T) {
 	}
 }
 
+func TestMixedAudioFilename(t *testing.T) {
+	tests := []struct {
+		name     string
+		roomName string
+		format   types.AudioRecordingFormat
+		want     string
+	}{
+		{
+			name:     "ogg with simple room name",
+			roomName: "egress-test",
+			format:   types.AudioRecordingFormatOGGOpus,
+			want:     "room_mix_egress-test.ogg",
+		},
+		{
+			name:     "wav with spaces and symbols",
+			roomName: "Team / Sync #1",
+			format:   types.AudioRecordingFormatWAVPCM,
+			want:     "room_mix_Team_Sync_1.wav",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mixedAudioFilename(tt.roomName, tt.format)
+			if got != tt.want {
+				t.Fatalf("mixedAudioFilename(%q, %q) = %q, want %q", tt.roomName, tt.format, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDownloadManifestLocal(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifestPath := path.Join(tmpDir, "manifest.json")
@@ -338,11 +369,11 @@ func TestUploadMergedFilesLocal(t *testing.T) {
 		t.Fatal("expected WAV artifact")
 	}
 
-	if _, err := os.Stat(path.Join(path.Dir(manifestPath), "room_mix.ogg")); err != nil {
-		t.Fatalf("expected copied room_mix.ogg: %v", err)
+	if _, err := os.Stat(path.Join(path.Dir(manifestPath), "room_mix_room-1.ogg")); err != nil {
+		t.Fatalf("expected copied room_mix_room-1.ogg: %v", err)
 	}
-	if _, err := os.Stat(path.Join(path.Dir(manifestPath), "room_mix.wav")); err != nil {
-		t.Fatalf("expected copied room_mix.wav: %v", err)
+	if _, err := os.Stat(path.Join(path.Dir(manifestPath), "room_mix_room-1.wav")); err != nil {
+		t.Fatalf("expected copied room_mix_room-1.wav: %v", err)
 	}
 }
 
@@ -538,10 +569,10 @@ func TestProcessJobLocalMergesAndUpdatesManifest(t *testing.T) {
 		t.Fatalf("room_mix artifact count = %d, want 2", len(updated.RoomMix.Artifacts))
 	}
 
-	if _, err = os.Stat(path.Join(manifestDir, "room_mix.ogg")); err != nil {
-		t.Fatalf("expected room_mix.ogg output: %v", err)
+	if _, err = os.Stat(path.Join(manifestDir, "room_mix_room-e2e.ogg")); err != nil {
+		t.Fatalf("expected room_mix_room-e2e.ogg output: %v", err)
 	}
-	if _, err = os.Stat(path.Join(manifestDir, "room_mix.wav")); err != nil {
-		t.Fatalf("expected room_mix.wav output: %v", err)
+	if _, err = os.Stat(path.Join(manifestDir, "room_mix_room-e2e.wav")); err != nil {
+		t.Fatalf("expected room_mix_room-e2e.wav output: %v", err)
 	}
 }
