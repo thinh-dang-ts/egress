@@ -122,6 +122,11 @@ func wireMergeEnqueuer(s *AudioRecordingSink, conf *config.PipelineConfig) {
 	if s != nil && s.arConf != nil && s.arConf.StorageConfig != nil {
 		storageConfig = s.arConf.StorageConfig
 	}
+	if (storageConfig == nil || storageConfig.IsLocal()) && conf != nil {
+		if fileConfig := conf.GetFileConfig(); fileConfig != nil && fileConfig.StorageConfig != nil {
+			storageConfig = fileConfig.StorageConfig
+		}
+	}
 
 	if conf.MergeInProcess {
 		enqueuer, err := newInProcessMergeEnqueuer(storageConfig)

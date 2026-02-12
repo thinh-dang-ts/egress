@@ -13,6 +13,39 @@ services:
       timeout: 3s
       retries: 5
 
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    container_name: egress-integration-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: minioadmin
+      MINIO_ROOT_PASSWORD: minioadmin
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    networks:
+      - egress-integration
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://localhost:9000/minio/health/ready"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-01-17T23-25-50Z
+    container_name: egress-integration-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      until mc alias set local http://minio:9000 minioadmin minioadmin; do sleep 1; done &&
+      mc mb -p local/egress-integration || true &&
+      mc anonymous set private local/egress-integration || true
+      "
+    networks:
+      - egress-integration
+
   integration-test:
     build:
       context: .
@@ -30,7 +63,9 @@ services:
         reservations:
           memory: 2G
     environment:
-      - EGRESS_CONFIG_FILE=/out/config.yaml
+      EGRESS_CONFIG_FILE: /out/config.yaml
+      S3_UPLOAD: >-
+        {"access_key":"minioadmin","secret":"minioadmin","region":"us-east-1","endpoint":"http://minio:9000","bucket":"egress-integration","force_path_style":true}
       # Optionally run a single test: TEST_RUN=TestSpecificTest
       # - TEST_RUN=
     volumes:
@@ -41,6 +76,8 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
     extra_hosts:
       - "host.docker.internal:host-gateway"
 

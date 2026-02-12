@@ -23,6 +23,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"strings"
 	"testing"
 
 	"cloud.google.com/go/storage"
@@ -71,6 +72,8 @@ func download(t *testing.T, c *config.StorageConfig, localFilepath, storageFilep
 }
 
 func downloadS3(t *testing.T, conf *lkstorage.S3Config, localFilepath, storageFilepath string, delete bool) {
+	key := normalizeS3DownloadKey(conf, storageFilepath)
+
 	file, err := os.Create(localFilepath)
 	require.NoError(t, err)
 	defer file.Close()
@@ -84,18 +87,34 @@ func downloadS3(t *testing.T, conf *lkstorage.S3Config, localFilepath, storageFi
 				SessionToken:    conf.SessionToken,
 			},
 		}
+		if conf.Endpoint != "" {
+			o.EndpointResolverWithOptions = aws.EndpointResolverWithOptionsFunc(
+				func(service, region string, _ ...interface{}) (aws.Endpoint, error) {
+					if service == s3.ServiceID {
+						return aws.Endpoint{
+							URL:               conf.Endpoint,
+							SigningRegion:     region,
+							HostnameImmutable: true,
+						}, nil
+					}
+					return aws.Endpoint{}, &aws.EndpointNotFoundError{}
+				},
+			)
+		}
 
 		return nil
 	})
 	require.NoError(t, err)
-	s3Client := s3.NewFromConfig(awsConf)
+	s3Client := s3.NewFromConfig(awsConf, func(o *s3.Options) {
+		o.UsePathStyle = conf.ForcePathStyle
+	})
 
 	_, err = manager.NewDownloader(s3Client).Download(
 		context.Background(),
 		file,
 		&s3.GetObjectInput{
 			Bucket: aws.String(conf.Bucket),
-			Key:    aws.String(storageFilepath),
+			Key:    aws.String(key),
 		},
 	)
 	require.NoError(t, err)
@@ -103,10 +122,43 @@ func downloadS3(t *testing.T, conf *lkstorage.S3Config, localFilepath, storageFi
 	if delete {
 		_, err = s3Client.DeleteObject(context.Background(), &s3.DeleteObjectInput{
 			Bucket: aws.String(conf.Bucket),
-			Key:    aws.String(storageFilepath),
+			Key:    aws.String(key),
 		})
 		require.NoError(t, err)
 	}
+}
+
+func normalizeS3DownloadKey(conf *lkstorage.S3Config, storageFilepath string) string {
+	u, err := url.Parse(storageFilepath)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return storageFilepath
+	}
+
+	pathPart := strings.TrimPrefix(u.Path, "/")
+	if pathPart == "" {
+		return storageFilepath
+	}
+
+	key := pathPart
+	if conf.Bucket != "" {
+		bucketPrefix := conf.Bucket + "/"
+		if strings.HasPrefix(pathPart, bucketPrefix) {
+			remainder := strings.TrimPrefix(pathPart, bucketPrefix)
+			if strings.HasPrefix(remainder, "/") {
+				key = "/" + strings.TrimPrefix(remainder, "/")
+			} else {
+				key = remainder
+			}
+		} else if strings.HasPrefix(strings.ToLower(u.Hostname()), strings.ToLower(conf.Bucket)+".") {
+			key = pathPart
+		}
+	}
+
+	if decodedKey, err := url.PathUnescape(key); err == nil {
+		key = decodedKey
+	}
+
+	return key
 }
 
 func downloadAzure(t *testing.T, conf *lkstorage.AzureConfig, localFilepath, storageFilepath string, delete bool) {

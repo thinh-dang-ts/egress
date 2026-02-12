@@ -85,6 +85,49 @@ func TestNearestOpusRate(t *testing.T) {
 	}
 }
 
+func TestNormalizeS3ObjectKey(t *testing.T) {
+	tests := []struct {
+		name   string
+		bucket string
+		input  string
+		want   string
+	}{
+		{
+			name:   "plain key unchanged",
+			bucket: "egress-integration",
+			input:  "room/session/manifest.json",
+			want:   "room/session/manifest.json",
+		},
+		{
+			name:   "path-style url",
+			bucket: "egress-integration",
+			input:  "http://minio:9000/egress-integration/room/session/manifest.json",
+			want:   "room/session/manifest.json",
+		},
+		{
+			name:   "path-style url with leading slash key",
+			bucket: "egress-integration",
+			input:  "http://minio:9000/egress-integration//home/egress/uploads/manifest.json",
+			want:   "/home/egress/uploads/manifest.json",
+		},
+		{
+			name:   "virtual-hosted style url",
+			bucket: "egress-integration",
+			input:  "https://egress-integration.s3.us-east-1.amazonaws.com/room/session/manifest.json",
+			want:   "room/session/manifest.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeS3ObjectKey(tt.bucket, tt.input)
+			if got != tt.want {
+				t.Fatalf("normalizeS3ObjectKey(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDownloadManifestLocal(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifestPath := path.Join(tmpDir, "manifest.json")

@@ -23,9 +23,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"os/exec"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -216,7 +218,7 @@ func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 // downloadManifest downloads and parses the manifest file
 func (w *MergeWorker) downloadManifest(ctx context.Context, manifestPath string, tmpDir string) (*config.AudioRecordingManifest, error) {
 	readPath := manifestPath
-	if w.storage != nil {
+	if w.hasRemoteStorage() {
 		localPath := path.Join(tmpDir, "manifest.json")
 		if err := w.downloadFile(ctx, manifestPath, localPath); err != nil {
 			return nil, err
@@ -258,7 +260,7 @@ func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *co
 			artifact = p.Artifacts[0]
 		}
 
-		if w.storage != nil {
+		if w.hasRemoteStorage() {
 			localPath := path.Join(tmpDir, fmt.Sprintf("%s_%s", p.ParticipantID, artifact.Filename))
 			if err := w.downloadFile(ctx, artifact.StorageURI, localPath); err != nil {
 				logger.Warnw("failed to download participant file", err, "participantID", p.ParticipantID)
@@ -276,12 +278,15 @@ func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *co
 
 // downloadFile downloads a file from storage
 func (w *MergeWorker) downloadFile(_ context.Context, remotePath, localPath string) error {
-	if w.storage == nil {
-		// Local storage - file should already exist or we can't download
-		return nil
+	if err := w.ensureStorage(); err != nil {
+		return err
 	}
 
-	_, err := w.storage.DownloadFile(remotePath, localPath)
+	if w.storage == nil {
+		return errors.New("remote storage is not configured")
+	}
+
+	_, err := w.storage.DownloadFile(localPath, w.normalizeRemotePath(remotePath))
 	return err
 }
 
@@ -470,7 +475,11 @@ func (w *MergeWorker) updateManifestWithMergeResults(_ context.Context, manifest
 		return err
 	}
 
-	if w.storage != nil {
+	if w.hasRemoteStorage() {
+		if err := w.ensureStorage(); err != nil {
+			return err
+		}
+
 		// Write to temp file and upload
 		tmpPath := path.Join(w.config.TmpDir, "manifest_updated.json")
 		if err := os.WriteFile(tmpPath, data, 0644); err != nil {
@@ -478,12 +487,75 @@ func (w *MergeWorker) updateManifestWithMergeResults(_ context.Context, manifest
 		}
 		defer os.Remove(tmpPath)
 
-		_, _, err = w.storage.UploadFile(tmpPath, manifestPath, string(types.OutputTypeJSON))
+		_, _, err = w.storage.UploadFile(tmpPath, w.normalizeRemotePath(manifestPath), string(types.OutputTypeJSON))
 		return err
 	}
 
 	// Local storage: write directly to the manifest path
 	return os.WriteFile(manifestPath, data, 0644)
+}
+
+func (w *MergeWorker) hasRemoteStorage() bool {
+	return w != nil && w.config != nil && w.config.StorageConfig != nil && !w.config.StorageConfig.IsLocal()
+}
+
+func (w *MergeWorker) ensureStorage() error {
+	if w.storage != nil || !w.hasRemoteStorage() {
+		return nil
+	}
+
+	store, err := getStorage(w.config.StorageConfig)
+	if err != nil {
+		return err
+	}
+
+	w.storage = store
+	return nil
+}
+
+func (w *MergeWorker) normalizeRemotePath(remotePath string) string {
+	if !w.hasRemoteStorage() {
+		return remotePath
+	}
+
+	if w.config.StorageConfig.S3 != nil {
+		return normalizeS3ObjectKey(w.config.StorageConfig.S3.Bucket, remotePath)
+	}
+
+	return remotePath
+}
+
+func normalizeS3ObjectKey(bucket, remotePath string) string {
+	u, err := url.Parse(remotePath)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return remotePath
+	}
+
+	pathPart := strings.TrimPrefix(u.Path, "/")
+	if pathPart == "" {
+		return remotePath
+	}
+
+	key := pathPart
+	if bucket != "" {
+		bucketPrefix := bucket + "/"
+		if strings.HasPrefix(pathPart, bucketPrefix) {
+			remainder := strings.TrimPrefix(pathPart, bucketPrefix)
+			if strings.HasPrefix(remainder, "/") {
+				key = "/" + strings.TrimPrefix(remainder, "/")
+			} else {
+				key = remainder
+			}
+		} else if strings.HasPrefix(strings.ToLower(u.Hostname()), strings.ToLower(bucket)+".") {
+			key = pathPart
+		}
+	}
+
+	if decodedKey, err := url.PathUnescape(key); err == nil {
+		return decodedKey
+	}
+
+	return key
 }
 
 // copyFile copies a file from src to dst
