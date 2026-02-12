@@ -443,15 +443,27 @@ func (s *AudioRecordingSink) Close() error {
 
 		// Ensure participant exists in manifest (may have been added by bin only)
 		if s.arConf.AudioManifest.GetParticipant(participantID) == nil {
-			s.arConf.AudioManifest.AddParticipant(
+			joinedAt := pConfig.JoinedAt
+			if joinedAt == 0 {
+				joinedAt = time.Now().UnixNano()
+			}
+			s.arConf.AudioManifest.AddParticipantAt(
 				participantID,
 				pConfig.ParticipantIdentity,
 				pConfig.TrackID,
+				joinedAt,
 			)
 		}
 
-		s.arConf.RemoveParticipant(participantID)
-		s.arConf.AudioManifest.UpdateParticipantLeft(participantID)
+		if pConfig.LeftAt == 0 {
+			s.arConf.RemoveParticipant(participantID)
+		}
+
+		leftAt := pConfig.LeftAt
+		if leftAt == 0 {
+			leftAt = time.Now().UnixNano()
+		}
+		s.arConf.AudioManifest.UpdateParticipantLeftAt(participantID, leftAt)
 
 		uploaded, err := s.uploadParticipantConfigFiles(participantID, pConfig)
 		if err != nil {

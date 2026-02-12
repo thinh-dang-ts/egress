@@ -246,13 +246,18 @@ func (c *AudioRecordingConfig) buildStoragePrefix() string {
 
 // AddParticipant adds a new participant to the recording
 func (c *AudioRecordingConfig) AddParticipant(participantID, participantIdentity, trackID string) *ParticipantAudioConfig {
+	return c.AddParticipantAt(participantID, participantIdentity, trackID, time.Now().UnixNano())
+}
+
+// AddParticipantAt adds a participant with an explicit join timestamp.
+func (c *AudioRecordingConfig) AddParticipantAt(participantID, participantIdentity, trackID string, joinedAt int64) *ParticipantAudioConfig {
 	config := &ParticipantAudioConfig{
 		ParticipantID:       participantID,
 		ParticipantIdentity: participantIdentity,
 		TrackID:             trackID,
 		LocalFilepaths:      make(map[types.AudioRecordingFormat]string),
 		StorageFilepaths:    make(map[types.AudioRecordingFormat]string),
-		JoinedAt:            time.Now().UnixNano(),
+		JoinedAt:            joinedAt,
 	}
 
 	// Generate file paths for each format
@@ -270,8 +275,13 @@ func (c *AudioRecordingConfig) AddParticipant(participantID, participantIdentity
 
 // RemoveParticipant marks a participant as having left the recording
 func (c *AudioRecordingConfig) RemoveParticipant(participantID string) {
+	c.RemoveParticipantAt(participantID, time.Now().UnixNano())
+}
+
+// RemoveParticipantAt marks a participant as having left at a specific time.
+func (c *AudioRecordingConfig) RemoveParticipantAt(participantID string, leftAt int64) {
 	if config, ok := c.ParticipantConfigs[participantID]; ok {
-		config.LeftAt = time.Now().UnixNano()
+		config.LeftAt = leftAt
 	}
 }
 

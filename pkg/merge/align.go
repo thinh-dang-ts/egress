@@ -74,6 +74,9 @@ func ComputeAlignment(manifest *config.AudioRecordingManifest) *AlignmentResult 
 
 	// Sort alignments by offset for easier processing
 	sort.Slice(result.Alignments, func(i, j int) bool {
+		if result.Alignments[i].Offset == result.Alignments[j].Offset {
+			return result.Alignments[i].ParticipantID < result.Alignments[j].ParticipantID
+		}
 		return result.Alignments[i].Offset < result.Alignments[j].Offset
 	})
 
@@ -112,16 +115,31 @@ func computeParticipantAlignment(p *config.ParticipantRecordingInfo, referenceSt
 
 // computeParticipantDuration computes the duration of a participant's recording
 func computeParticipantDuration(p *config.ParticipantRecordingInfo) time.Duration {
+	var timelineDuration time.Duration
+	if p.JoinedAt > 0 && p.LeftAt > p.JoinedAt {
+		timelineDuration = time.Duration(p.LeftAt - p.JoinedAt)
+	}
+
 	// Try to get duration from artifacts
+	var artifactDuration time.Duration
 	for _, artifact := range p.Artifacts {
 		if artifact.DurationMs > 0 {
-			return time.Duration(artifact.DurationMs) * time.Millisecond
+			artifactDuration = time.Duration(artifact.DurationMs) * time.Millisecond
+			break
 		}
 	}
 
-	// Fall back to join/leave times
-	if p.JoinedAt > 0 && p.LeftAt > 0 {
-		return time.Duration(p.LeftAt - p.JoinedAt)
+	// Prefer explicit timeline from joined/left when available, unless it is
+	// clearly a placeholder (older manifests can have near-zero join/left deltas).
+	if timelineDuration > 0 {
+		if artifactDuration > 0 && timelineDuration < 250*time.Millisecond && artifactDuration > 2*time.Second {
+			return artifactDuration
+		}
+		return timelineDuration
+	}
+
+	if artifactDuration > 0 {
+		return artifactDuration
 	}
 
 	// Default to 0 if we can't determine duration

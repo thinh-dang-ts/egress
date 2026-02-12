@@ -16,6 +16,7 @@ package builder
 
 import (
 	"fmt"
+	"time"
 
 	"github.com/go-gst/go-gst/gst"
 	"github.com/linkdata/deadlock"
@@ -41,9 +42,9 @@ type AudioRecordingBin struct {
 	conf     *config.PipelineConfig
 	arConf   *config.AudioRecordingConfig
 
-	mu               deadlock.Mutex
-	participantBins  map[string]*ParticipantRecordingBin
-	nextID           int
+	mu              deadlock.Mutex
+	participantBins map[string]*ParticipantRecordingBin
+	nextID          int
 
 	// Callbacks for participant events
 	onParticipantAdded   func(participantID string)
@@ -137,6 +138,13 @@ func (b *AudioRecordingBin) onTrackRemoved(trackID string) {
 
 	logger.Debugw("removing audio recording bin for track", "trackID", trackID)
 
+	// Persist timeline end for offline merge alignment.
+	leftAt := time.Now().UnixNano()
+	b.arConf.RemoveParticipantAt(trackID, leftAt)
+	if b.arConf.AudioManifest != nil {
+		b.arConf.AudioManifest.UpdateParticipantLeftAt(trackID, leftAt)
+	}
+
 	// Don't set to NULL here — the writer has already sent EOS to the appsrc
 	// via EndStream(). Let EOS propagate through the bin so filesink finalizes
 	// properly and posts EOS to the pipeline bus for correct EOS aggregation.
@@ -183,7 +191,11 @@ func (b *AudioRecordingBin) addParticipantBin(ts *config.TrackSource) error {
 	// Use trackID as participantID for now (SDK source will provide actual participant info)
 	participantID := ts.TrackID
 	participantIdentity := ts.TrackID // Will be updated later if available
-	b.arConf.AddParticipant(participantID, participantIdentity, ts.TrackID)
+	joinedAt := time.Now().UnixNano()
+	b.arConf.AddParticipantAt(participantID, participantIdentity, ts.TrackID, joinedAt)
+	if b.arConf.AudioManifest != nil && b.arConf.AudioManifest.GetParticipant(participantID) == nil {
+		b.arConf.AudioManifest.AddParticipantAt(participantID, participantIdentity, ts.TrackID, joinedAt)
+	}
 
 	// Create file sinks for each format
 	fileSinks := make(map[types.AudioRecordingFormat]*gst.Element)

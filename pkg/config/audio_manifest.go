@@ -28,11 +28,11 @@ import (
 type AudioRecordingStatus string
 
 const (
-	AudioRecordingStatusRecording  AudioRecordingStatus = "recording"
-	AudioRecordingStatusUploading  AudioRecordingStatus = "uploading"
-	AudioRecordingStatusMerging    AudioRecordingStatus = "merging"
-	AudioRecordingStatusCompleted  AudioRecordingStatus = "completed"
-	AudioRecordingStatusFailed     AudioRecordingStatus = "failed"
+	AudioRecordingStatusRecording AudioRecordingStatus = "recording"
+	AudioRecordingStatusUploading AudioRecordingStatus = "uploading"
+	AudioRecordingStatusMerging   AudioRecordingStatus = "merging"
+	AudioRecordingStatusCompleted AudioRecordingStatus = "completed"
+	AudioRecordingStatusFailed    AudioRecordingStatus = "failed"
 )
 
 // AudioRecordingManifest contains metadata for an audio recording session
@@ -46,10 +46,10 @@ type AudioRecordingManifest struct {
 	SessionID string `json:"session_id"`
 
 	// Recording parameters
-	Formats     []types.AudioRecordingFormat `json:"formats"`
-	SampleRate  int32                        `json:"sample_rate"`
-	ChannelCount int32                       `json:"channel_count"`
-	Encryption  string                       `json:"encryption,omitempty"` // Encryption mode used
+	Formats      []types.AudioRecordingFormat `json:"formats"`
+	SampleRate   int32                        `json:"sample_rate"`
+	ChannelCount int32                        `json:"channel_count"`
+	Encryption   string                       `json:"encryption,omitempty"` // Encryption mode used
 
 	// Timing
 	StartedAt int64 `json:"started_at"` // Unix nanoseconds
@@ -122,6 +122,11 @@ func NewAudioRecordingManifest(egressID, roomID, roomName, sessionID string, for
 
 // AddParticipant adds a new participant to the manifest
 func (m *AudioRecordingManifest) AddParticipant(participantID, participantIdentity, trackID string) *ParticipantRecordingInfo {
+	return m.AddParticipantAt(participantID, participantIdentity, trackID, time.Now().UnixNano())
+}
+
+// AddParticipantAt adds a participant using an explicit join timestamp.
+func (m *AudioRecordingManifest) AddParticipantAt(participantID, participantIdentity, trackID string, joinedAt int64) *ParticipantRecordingInfo {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -129,7 +134,7 @@ func (m *AudioRecordingManifest) AddParticipant(participantID, participantIdenti
 		ParticipantID:       participantID,
 		ParticipantIdentity: participantIdentity,
 		TrackID:             trackID,
-		JoinedAt:            time.Now().UnixNano(),
+		JoinedAt:            joinedAt,
 		Artifacts:           make([]*AudioArtifact, 0),
 	}
 
@@ -152,12 +157,17 @@ func (m *AudioRecordingManifest) GetParticipant(participantID string) *Participa
 
 // UpdateParticipantLeft marks a participant as having left
 func (m *AudioRecordingManifest) UpdateParticipantLeft(participantID string) {
+	m.UpdateParticipantLeftAt(participantID, time.Now().UnixNano())
+}
+
+// UpdateParticipantLeftAt marks a participant as left at an explicit timestamp.
+func (m *AudioRecordingManifest) UpdateParticipantLeftAt(participantID string, leftAt int64) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	for _, p := range m.Participants {
 		if p.ParticipantID == participantID {
-			p.LeftAt = time.Now().UnixNano()
+			p.LeftAt = leftAt
 			return
 		}
 	}

@@ -295,6 +295,7 @@ func (w *MergeWorker) downloadFile(_ context.Context, remotePath, localPath stri
 // mergeTracks merges participant tracks using GStreamer
 func (w *MergeWorker) mergeTracks(ctx context.Context, manifest *config.AudioRecordingManifest, participantFiles map[string]string, alignment *AlignmentResult, tmpDir string) (map[types.AudioRecordingFormat]string, error) {
 	mergedFiles := make(map[types.AudioRecordingFormat]string)
+	manifest.ChannelCount = int32(len(participantFiles))
 
 	// Build GStreamer pipeline for merging
 	// Pipeline: filesrc -> decoder -> identity(ts-offset) -> interleave -> encoder -> filesink
