@@ -202,6 +202,8 @@ func downloadAzure(t *testing.T, conf *lkstorage.AzureConfig, localFilepath, sto
 }
 
 func downloadGCP(t *testing.T, conf *lkstorage.GCPConfig, localFilepath, storageFilepath string, delete bool) {
+	key := normalizeGCPDownloadKey(conf, storageFilepath)
+
 	ctx := context.Background()
 	var client *storage.Client
 
@@ -218,7 +220,7 @@ func downloadGCP(t *testing.T, conf *lkstorage.GCPConfig, localFilepath, storage
 	require.NoError(t, err)
 	defer file.Close()
 
-	rc, err := client.Bucket(conf.Bucket).Object(storageFilepath).Retryer(
+	rc, err := client.Bucket(conf.Bucket).Object(key).Retryer(
 		storage.WithBackoff(
 			gax.Backoff{
 				Initial:    minDelay,
@@ -234,7 +236,40 @@ func downloadGCP(t *testing.T, conf *lkstorage.GCPConfig, localFilepath, storage
 	require.NoError(t, err)
 
 	if delete {
-		err = client.Bucket(conf.Bucket).Object(storageFilepath).Delete(context.Background())
+		err = client.Bucket(conf.Bucket).Object(key).Delete(context.Background())
 		require.NoError(t, err)
 	}
+}
+
+func normalizeGCPDownloadKey(conf *lkstorage.GCPConfig, storageFilepath string) string {
+	u, err := url.Parse(storageFilepath)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return storageFilepath
+	}
+
+	pathPart := strings.TrimPrefix(u.Path, "/")
+	if pathPart == "" {
+		return storageFilepath
+	}
+
+	key := pathPart
+	if conf.Bucket != "" {
+		bucketPrefix := conf.Bucket + "/"
+		if strings.HasPrefix(pathPart, bucketPrefix) {
+			remainder := strings.TrimPrefix(pathPart, bucketPrefix)
+			if strings.HasPrefix(remainder, "/") {
+				key = "/" + strings.TrimPrefix(remainder, "/")
+			} else {
+				key = remainder
+			}
+		} else if strings.EqualFold(u.Hostname(), conf.Bucket) || strings.HasPrefix(strings.ToLower(u.Hostname()), strings.ToLower(conf.Bucket)+".") {
+			key = pathPart
+		}
+	}
+
+	if decodedKey, err := url.PathUnescape(key); err == nil {
+		key = decodedKey
+	}
+
+	return key
 }

@@ -487,12 +487,42 @@ func (w *MergeWorker) updateManifestWithMergeResults(_ context.Context, manifest
 		}
 		defer os.Remove(tmpPath)
 
-		_, _, err = w.storage.UploadFile(tmpPath, w.normalizeRemotePath(manifestPath), string(types.OutputTypeJSON))
+		remoteManifestPath := w.normalizeRemotePath(manifestPath)
+		uploadManifestPath := remoteManifestPath
+		// GCS updates can require storage.objects.delete on overwrite.
+		// To avoid that requirement, write a sibling merged manifest object.
+		if w.config.StorageConfig != nil && w.config.StorageConfig.GCP != nil {
+			uploadManifestPath = mergedManifestObjectKey(remoteManifestPath)
+		}
+
+		_, _, err = w.storage.UploadFile(tmpPath, uploadManifestPath, string(types.OutputTypeJSON))
+		if err == nil && uploadManifestPath != remoteManifestPath {
+			logger.Infow("uploaded merged manifest to a new key",
+				"originalManifestPath", remoteManifestPath,
+				"mergedManifestPath", uploadManifestPath,
+			)
+		}
 		return err
 	}
 
 	// Local storage: write directly to the manifest path
 	return os.WriteFile(manifestPath, data, 0644)
+}
+
+func mergedManifestObjectKey(manifestPath string) string {
+	base := path.Base(manifestPath)
+	if base == "." || base == "/" || base == "" {
+		return manifestPath
+	}
+
+	ext := path.Ext(base)
+	name := strings.TrimSuffix(base, ext)
+	if name == "" {
+		return manifestPath
+	}
+
+	mergedName := name + "_merged" + ext
+	return path.Join(path.Dir(manifestPath), mergedName)
 }
 
 func (w *MergeWorker) hasRemoteStorage() bool {
@@ -521,6 +551,9 @@ func (w *MergeWorker) normalizeRemotePath(remotePath string) string {
 	if w.config.StorageConfig.S3 != nil {
 		return normalizeS3ObjectKey(w.config.StorageConfig.S3.Bucket, remotePath)
 	}
+	if w.config.StorageConfig.GCP != nil {
+		return normalizeGCSObjectKey(w.config.StorageConfig.GCP.Bucket, remotePath)
+	}
 
 	return remotePath
 }
@@ -547,6 +580,39 @@ func normalizeS3ObjectKey(bucket, remotePath string) string {
 				key = remainder
 			}
 		} else if strings.HasPrefix(strings.ToLower(u.Hostname()), strings.ToLower(bucket)+".") {
+			key = pathPart
+		}
+	}
+
+	if decodedKey, err := url.PathUnescape(key); err == nil {
+		return decodedKey
+	}
+
+	return key
+}
+
+func normalizeGCSObjectKey(bucket, remotePath string) string {
+	u, err := url.Parse(remotePath)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+		return remotePath
+	}
+
+	pathPart := strings.TrimPrefix(u.Path, "/")
+	if pathPart == "" {
+		return remotePath
+	}
+
+	key := pathPart
+	if bucket != "" {
+		bucketPrefix := bucket + "/"
+		if strings.HasPrefix(pathPart, bucketPrefix) {
+			remainder := strings.TrimPrefix(pathPart, bucketPrefix)
+			if strings.HasPrefix(remainder, "/") {
+				key = "/" + strings.TrimPrefix(remainder, "/")
+			} else {
+				key = remainder
+			}
+		} else if strings.EqualFold(u.Hostname(), bucket) || strings.HasPrefix(strings.ToLower(u.Hostname()), strings.ToLower(bucket)+".") {
 			key = pathPart
 		}
 	}

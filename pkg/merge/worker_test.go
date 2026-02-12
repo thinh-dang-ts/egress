@@ -128,6 +128,93 @@ func TestNormalizeS3ObjectKey(t *testing.T) {
 	}
 }
 
+func TestNormalizeGCSObjectKey(t *testing.T) {
+	tests := []struct {
+		name   string
+		bucket string
+		input  string
+		want   string
+	}{
+		{
+			name:   "plain key unchanged",
+			bucket: "gcs-bucket",
+			input:  "room/session/manifest.json",
+			want:   "room/session/manifest.json",
+		},
+		{
+			name:   "virtual-hosted style url",
+			bucket: "gcs-bucket",
+			input:  "https://gcs-bucket.storage.googleapis.com/room/session/manifest.json",
+			want:   "room/session/manifest.json",
+		},
+		{
+			name:   "path-style url",
+			bucket: "gcs-bucket",
+			input:  "https://storage.googleapis.com/gcs-bucket/room/session/manifest.json",
+			want:   "room/session/manifest.json",
+		},
+		{
+			name:   "signed path-style url",
+			bucket: "gcs-bucket",
+			input:  "https://storage.googleapis.com/gcs-bucket/room/session/manifest.json?X-Goog-Algorithm=GOOG4-RSA-SHA256",
+			want:   "room/session/manifest.json",
+		},
+		{
+			name:   "url-encoded key",
+			bucket: "gcs-bucket",
+			input:  "https://gcs-bucket.storage.googleapis.com/room%2Fsession%2Fmanifest.json",
+			want:   "room/session/manifest.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := normalizeGCSObjectKey(tt.bucket, tt.input)
+			if got != tt.want {
+				t.Fatalf("normalizeGCSObjectKey(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestMergedManifestObjectKey(t *testing.T) {
+	tests := []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{
+			name:  "manifest json key",
+			input: "room/session/manifest.json",
+			want:  "room/session/manifest_merged.json",
+		},
+		{
+			name:  "egress manifest key",
+			input: "room/session/egress_manifest.json",
+			want:  "room/session/egress_manifest_merged.json",
+		},
+		{
+			name:  "no extension",
+			input: "room/session/manifest",
+			want:  "room/session/manifest_merged",
+		},
+		{
+			name:  "filename only",
+			input: "manifest.json",
+			want:  "manifest_merged.json",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := mergedManifestObjectKey(tt.input)
+			if got != tt.want {
+				t.Fatalf("mergedManifestObjectKey(%q) = %q, want %q", tt.input, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDownloadManifestLocal(t *testing.T) {
 	tmpDir := t.TempDir()
 	manifestPath := path.Join(tmpDir, "manifest.json")
