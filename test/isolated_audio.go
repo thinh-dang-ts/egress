@@ -867,33 +867,46 @@ func (r *Runner) verify8kOpusBitrateProfile(
 	manifest *config.AudioRecordingManifest,
 ) {
 	if manifest == nil || manifest.RoomMix == nil {
+		t.Logf("manifest or room mix is nil")
 		return
 	}
 
+	verified := false
 	for _, artifact := range manifest.RoomMix.Artifacts {
 		if artifact.Format != types.AudioRecordingFormatOGGOpus {
+			t.Logf("artifact format is not OGG Opus: %s", artifact.Format)
 			continue
 		}
 
 		mergedPath := r.materializeAudioArtifact(t, storageConfig, info.EgressId, artifact.StorageURI)
-		if mergedPath == "" {
-			return
+		if mergedPath != "" {
+			probeInfo, err := ffprobe(mergedPath)
+			if err == nil && probeInfo != nil && probeInfo.Format.Duration != "" {
+				dur, err := parseFFProbeDuration(probeInfo.Format.Duration)
+				if err == nil && dur > 0 {
+					kbps := (float64(artifact.Size) * 8.0) / (dur.Seconds() * 1000.0)
+					t.Logf("8k sample-rate check: room mix size=%d duration=%v approx_bitrate=%.2f kbps", artifact.Size, dur, kbps)
+					require.Less(t, kbps, 60.0, "room mix bitrate should stay low for 8k sample-rate profile")
+					require.Greater(t, kbps, 8.0, "room mix bitrate should be non-trivial")
+					verified = true
+					break
+				}
+			}
 		}
 
-		probeInfo, err := ffprobe(mergedPath)
-		if err != nil || probeInfo == nil || probeInfo.Format.Duration == "" {
-			return
+		// Fallback for presigned URLs or unavailable ffprobe: use egress runtime duration.
+		recordingDur := time.Duration(info.EndedAt - info.StartedAt)
+		if recordingDur > 0 {
+			kbps := (float64(artifact.Size) * 8.0) / (recordingDur.Seconds() * 1000.0)
+			t.Logf("8k sample-rate fallback check: room mix size=%d recording_duration=%v approx_bitrate=%.2f kbps", artifact.Size, recordingDur, kbps)
+			require.Less(t, kbps, 60.0, "room mix bitrate should stay low for 8k sample-rate profile")
+			require.Greater(t, kbps, 5.0, "room mix bitrate should be non-trivial")
+			verified = true
+			break
 		}
+	}
 
-		dur, err := parseFFProbeDuration(probeInfo.Format.Duration)
-		if err != nil || dur <= 0 {
-			return
-		}
-
-		kbps := (float64(artifact.Size) * 8.0) / (dur.Seconds() * 1000.0)
-		t.Logf("8k sample-rate check: room mix size=%d duration=%v approx_bitrate=%.2f kbps", artifact.Size, dur, kbps)
-		require.Less(t, kbps, 60.0, "room mix bitrate should stay low for 8k sample-rate profile")
-		require.Greater(t, kbps, 8.0, "room mix bitrate should be non-trivial")
-		return
+	if !verified {
+		require.Fail(t, "unable to verify 8k Opus bitrate profile")
 	}
 }
