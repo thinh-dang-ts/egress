@@ -17,6 +17,7 @@
 package merge
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -560,16 +561,47 @@ func (w *MergeWorker) runMergePipeline(ctx context.Context, participantFiles map
 
 	// Run gst-launch-1.0
 	cmd := exec.CommandContext(ctx, "gst-launch-1.0", args...)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
 
 	logger.Debugw("running merge pipeline", "args", args, "participants", participantOrder, "channels", len(participantOrder))
 
 	if err := cmd.Run(); err != nil {
+		logCommandOutput("gst-launch-1.0", "stdout", stdout.String())
+		logCommandOutput("gst-launch-1.0", "stderr", stderr.String())
+
+		trimmedErr := strings.TrimSpace(stderr.String())
+		if trimmedErr != "" {
+			return fmt.Errorf("gst-launch failed: %w: %s", err, trimmedErr)
+		}
+		trimmedOut := strings.TrimSpace(stdout.String())
+		if trimmedOut != "" {
+			return fmt.Errorf("gst-launch failed: %w: %s", err, trimmedOut)
+		}
 		return fmt.Errorf("gst-launch failed: %w", err)
 	}
 
+	logCommandOutput("gst-launch-1.0", "stdout", stdout.String())
+	logCommandOutput("gst-launch-1.0", "stderr", stderr.String())
+
 	return nil
+}
+
+func logCommandOutput(command, stream, output string) {
+	trimmed := strings.TrimSpace(output)
+	if trimmed == "" {
+		return
+	}
+
+	for _, line := range strings.Split(trimmed, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		logger.Debugw("command output", "command", command, "stream", stream, "line", line)
+	}
 }
 
 func orderedParticipantIDs(participantFiles map[string]string, alignment *AlignmentResult) []string {

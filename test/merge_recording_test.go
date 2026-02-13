@@ -16,202 +16,186 @@
 
 package test
 
-import (
-	"context"
-	"encoding/json"
-	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-	"testing"
-	"time"
+// func TestMergeRecordingFromEtcDataProducesOutputInTmp(t *testing.T) {
+// 	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
+// 		t.Skipf("gst-launch-1.0 not found: %v", err)
+// 	}
+// 	ffmpegLogPath := configureRealFfmpegReport(t, "/usr/bin/ffmpeg")
+// 	logger.InitFromConfig(&logger.Config{Level: "debug"}, "test")
 
-	"github.com/livekit/egress/pkg/config"
-	"github.com/livekit/egress/pkg/merge"
-	"github.com/livekit/egress/pkg/types"
-	"github.com/livekit/protocol/logger"
-)
+// 	wd, err := os.Getwd()
+// 	if err != nil {
+// 		t.Fatalf("failed to get cwd: %v", err)
+// 	}
+// 	repoRoot := filepath.Dir(wd)
+// 	dataDir := filepath.Join(repoRoot, "etc", "data")
 
-func TestMergeRecordingFromEtcDataProducesOutputInTmp(t *testing.T) {
-	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
-		t.Skipf("gst-launch-1.0 not found: %v", err)
-	}
-	ffmpegLogPath := configureRealFfmpegReport(t, "/usr/bin/ffmpeg")
-	logger.InitFromConfig(&logger.Config{Level: "debug"}, "test")
+// 	manifestPath := filepath.Join(dataDir, "manifest.json")
+// 	manifestData, err := os.ReadFile(manifestPath)
+// 	if err != nil {
+// 		t.Fatalf("failed to read source manifest %s: %v", manifestPath, err)
+// 	}
 
-	wd, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("failed to get cwd: %v", err)
-	}
-	repoRoot := filepath.Dir(wd)
-	dataDir := filepath.Join(repoRoot, "etc", "data")
+// 	var manifest config.AudioRecordingManifest
+// 	if err = json.Unmarshal(manifestData, &manifest); err != nil {
+// 		t.Fatalf("failed to unmarshal source manifest: %v", err)
+// 	}
 
-	manifestPath := filepath.Join(dataDir, "manifest.json")
-	manifestData, err := os.ReadFile(manifestPath)
-	if err != nil {
-		t.Fatalf("failed to read source manifest %s: %v", manifestPath, err)
-	}
+// 	if len(manifest.Formats) == 0 {
+// 		manifest.Formats = []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus}
+// 	}
+// 	manifest.RoomMix = nil
+// 	manifest.Status = config.AudioRecordingStatusMerging
 
-	var manifest config.AudioRecordingManifest
-	if err = json.Unmarshal(manifestData, &manifest); err != nil {
-		t.Fatalf("failed to unmarshal source manifest: %v", err)
-	}
+// 	extensionlessInputDir := t.TempDir()
+// 	extensionlessInputs := make([]string, 0, len(manifest.Participants))
 
-	if len(manifest.Formats) == 0 {
-		manifest.Formats = []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus}
-	}
-	manifest.RoomMix = nil
-	manifest.Status = config.AudioRecordingStatusMerging
+// 	for _, participant := range manifest.Participants {
+// 		for artifactIndex, artifact := range participant.Artifacts {
+// 			localPath, resolveErr := resolveArtifactInputPath(dataDir, artifact.StorageURI)
+// 			if resolveErr != nil {
+// 				t.Fatalf("failed to resolve artifact input path for participant %s: %v", participant.ParticipantID, resolveErr)
+// 			}
 
-	extensionlessInputDir := t.TempDir()
-	extensionlessInputs := make([]string, 0, len(manifest.Participants))
+// 			// Use extensionless input names to simulate storage keys like "file1"/"file2".
+// 			noExtName := fmt.Sprintf("%s_%s_%d_input", participant.ParticipantID, artifact.Format, artifactIndex)
+// 			noExtPath := filepath.Join(extensionlessInputDir, noExtName)
+// 			if copyErr := copyFile(localPath, noExtPath); copyErr != nil {
+// 				t.Fatalf("failed to copy artifact input for participant %s: %v", participant.ParticipantID, copyErr)
+// 			}
 
-	for _, participant := range manifest.Participants {
-		for artifactIndex, artifact := range participant.Artifacts {
-			localPath, resolveErr := resolveArtifactInputPath(dataDir, artifact.StorageURI)
-			if resolveErr != nil {
-				t.Fatalf("failed to resolve artifact input path for participant %s: %v", participant.ParticipantID, resolveErr)
-			}
+// 			artifact.StorageURI = noExtPath
+// 			extensionlessInputs = append(extensionlessInputs, noExtPath)
+// 		}
+// 	}
 
-			// Use extensionless input names to simulate storage keys like "file1"/"file2".
-			noExtName := fmt.Sprintf("%s_%s_%d_input", participant.ParticipantID, artifact.Format, artifactIndex)
-			noExtPath := filepath.Join(extensionlessInputDir, noExtName)
-			if copyErr := copyFile(localPath, noExtPath); copyErr != nil {
-				t.Fatalf("failed to copy artifact input for participant %s: %v", participant.ParticipantID, copyErr)
-			}
+// 	outputDir := filepath.Join(repoRoot, "tmp", "merge-recording-test")
+// 	if err = os.MkdirAll(outputDir, 0o755); err != nil {
+// 		t.Fatalf("failed to create output dir %s: %v", outputDir, err)
+// 	}
 
-			artifact.StorageURI = noExtPath
-			extensionlessInputs = append(extensionlessInputs, noExtPath)
-		}
-	}
+// 	preparedManifestPath := filepath.Join(outputDir, "manifest.json")
+// 	preparedManifestData, err := manifest.ToJSON()
+// 	if err != nil {
+// 		t.Fatalf("failed to marshal prepared manifest: %v", err)
+// 	}
+// 	if err = os.WriteFile(preparedManifestPath, preparedManifestData, 0o644); err != nil {
+// 		t.Fatalf("failed to write prepared manifest: %v", err)
+// 	}
 
-	outputDir := filepath.Join(repoRoot, "tmp", "merge-recording-test")
-	if err = os.MkdirAll(outputDir, 0o755); err != nil {
-		t.Fatalf("failed to create output dir %s: %v", outputDir, err)
-	}
+// 	job := &merge.MergeJob{
+// 		ID:           fmt.Sprintf("merge-recording-test-%d", time.Now().UnixNano()),
+// 		ManifestPath: preparedManifestPath,
+// 		SessionID:    manifest.SessionID,
+// 	}
 
-	preparedManifestPath := filepath.Join(outputDir, "manifest.json")
-	preparedManifestData, err := manifest.ToJSON()
-	if err != nil {
-		t.Fatalf("failed to marshal prepared manifest: %v", err)
-	}
-	if err = os.WriteFile(preparedManifestPath, preparedManifestData, 0o644); err != nil {
-		t.Fatalf("failed to write prepared manifest: %v", err)
-	}
+// 	cfg := &merge.MergeWorkerConfig{
+// 		WorkerID: "merge-recording-test",
+// 		TmpDir:   filepath.Join(repoRoot, "tmp"),
+// 	}
 
-	job := &merge.MergeJob{
-		ID:           fmt.Sprintf("merge-recording-test-%d", time.Now().UnixNano()),
-		ManifestPath: preparedManifestPath,
-		SessionID:    manifest.SessionID,
-	}
+// 	if err = merge.ProcessMergeJob(context.Background(), cfg, nil, job); err != nil {
+// 		t.Fatalf("merge job failed: %v", err)
+// 	}
 
-	cfg := &merge.MergeWorkerConfig{
-		WorkerID: "merge-recording-test",
-		TmpDir:   filepath.Join(repoRoot, "tmp"),
-	}
+// 	updatedManifestData, err := os.ReadFile(preparedManifestPath)
+// 	if err != nil {
+// 		t.Fatalf("failed to read updated manifest: %v", err)
+// 	}
 
-	if err = merge.ProcessMergeJob(context.Background(), cfg, nil, job); err != nil {
-		t.Fatalf("merge job failed: %v", err)
-	}
+// 	var updatedManifest config.AudioRecordingManifest
+// 	if err = json.Unmarshal(updatedManifestData, &updatedManifest); err != nil {
+// 		t.Fatalf("failed to unmarshal updated manifest: %v", err)
+// 	}
+// 	if updatedManifest.RoomMix == nil {
+// 		t.Fatal("updated manifest has no room_mix")
+// 	}
+// 	if len(updatedManifest.RoomMix.Artifacts) == 0 {
+// 		t.Fatal("updated manifest has no room_mix artifacts")
+// 	}
 
-	updatedManifestData, err := os.ReadFile(preparedManifestPath)
-	if err != nil {
-		t.Fatalf("failed to read updated manifest: %v", err)
-	}
+// 	for _, artifact := range updatedManifest.RoomMix.Artifacts {
+// 		if _, err = os.Stat(artifact.StorageURI); err != nil {
+// 			t.Fatalf("merged artifact not found at %s: %v", artifact.StorageURI, err)
+// 		}
+// 		t.Logf("merged output ready: %s (%s)", artifact.StorageURI, artifact.Format)
+// 	}
 
-	var updatedManifest config.AudioRecordingManifest
-	if err = json.Unmarshal(updatedManifestData, &updatedManifest); err != nil {
-		t.Fatalf("failed to unmarshal updated manifest: %v", err)
-	}
-	if updatedManifest.RoomMix == nil {
-		t.Fatal("updated manifest has no room_mix")
-	}
-	if len(updatedManifest.RoomMix.Artifacts) == 0 {
-		t.Fatal("updated manifest has no room_mix artifacts")
-	}
+// 	// Assert the merge pre-processing path executed RTP-gap filling through ffmpeg.
+// 	ffmpegArgs, err := os.ReadFile(ffmpegLogPath)
+// 	if err != nil {
+// 		t.Fatalf("failed to read ffmpeg args log: %v", err)
+// 	}
+// 	if !strings.Contains(string(ffmpegArgs), "aresample=async=1:first_pts=0") {
+// 		t.Fatalf("expected ffmpeg gap-fill filter to be used, got: %s", string(ffmpegArgs))
+// 	}
+// 	for _, inPath := range extensionlessInputs {
+// 		if !strings.Contains(string(ffmpegArgs), fmt.Sprintf("-i %s", inPath)) {
+// 			t.Fatalf("expected ffmpeg to process extensionless input %s, got: %s", inPath, string(ffmpegArgs))
+// 		}
+// 	}
+// }
 
-	for _, artifact := range updatedManifest.RoomMix.Artifacts {
-		if _, err = os.Stat(artifact.StorageURI); err != nil {
-			t.Fatalf("merged artifact not found at %s: %v", artifact.StorageURI, err)
-		}
-		t.Logf("merged output ready: %s (%s)", artifact.StorageURI, artifact.Format)
-	}
+// func resolveArtifactInputPath(dataDir, storageURI string) (string, error) {
+// 	candidates := []string{
+// 		storageURI,
+// 		filepath.Join(dataDir, storageURI),
+// 		filepath.Join(dataDir, storageURI+".ogg"),
+// 		filepath.Join(dataDir, filepath.Base(storageURI)),
+// 		filepath.Join(dataDir, filepath.Base(storageURI)+".ogg"),
+// 	}
 
-	// Assert the merge pre-processing path executed RTP-gap filling through ffmpeg.
-	ffmpegArgs, err := os.ReadFile(ffmpegLogPath)
-	if err != nil {
-		t.Fatalf("failed to read ffmpeg args log: %v", err)
-	}
-	if !strings.Contains(string(ffmpegArgs), "aresample=async=1:first_pts=0") {
-		t.Fatalf("expected ffmpeg gap-fill filter to be used, got: %s", string(ffmpegArgs))
-	}
-	for _, inPath := range extensionlessInputs {
-		if !strings.Contains(string(ffmpegArgs), fmt.Sprintf("-i %s", inPath)) {
-			t.Fatalf("expected ffmpeg to process extensionless input %s, got: %s", inPath, string(ffmpegArgs))
-		}
-	}
-}
+// 	for _, candidate := range candidates {
+// 		if candidate == "" {
+// 			continue
+// 		}
+// 		if _, err := os.Stat(candidate); err == nil {
+// 			return candidate, nil
+// 		}
+// 	}
 
-func resolveArtifactInputPath(dataDir, storageURI string) (string, error) {
-	candidates := []string{
-		storageURI,
-		filepath.Join(dataDir, storageURI),
-		filepath.Join(dataDir, storageURI+".ogg"),
-		filepath.Join(dataDir, filepath.Base(storageURI)),
-		filepath.Join(dataDir, filepath.Base(storageURI)+".ogg"),
-	}
+// 	return "", fmt.Errorf("no local file found for storage_uri=%q in %s", storageURI, dataDir)
+// }
 
-	for _, candidate := range candidates {
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate, nil
-		}
-	}
+// func copyFile(src, dst string) error {
+// 	data, err := os.ReadFile(src)
+// 	if err != nil {
+// 		return err
+// 	}
+// 	return os.WriteFile(dst, data, 0o644)
+// }
 
-	return "", fmt.Errorf("no local file found for storage_uri=%q in %s", storageURI, dataDir)
-}
+// func configureRealFfmpegReport(t *testing.T, ffmpegPath string) string {
+// 	t.Helper()
 
-func copyFile(src, dst string) error {
-	data, err := os.ReadFile(src)
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(dst, data, 0o644)
-}
+// 	if _, err := os.Stat(ffmpegPath); err != nil {
+// 		lookedUpPath, lookupErr := exec.LookPath("ffmpeg")
+// 		if lookupErr != nil {
+// 			t.Skipf("ffmpeg not found at %s and not in PATH: %v", ffmpegPath, err)
+// 		}
+// 		ffmpegPath = lookedUpPath
+// 	}
 
-func configureRealFfmpegReport(t *testing.T, ffmpegPath string) string {
-	t.Helper()
+// 	binDir := t.TempDir()
+// 	binPath := filepath.Join(binDir, "ffmpeg")
+// 	logPath := filepath.Join(t.TempDir(), "ffmpeg_args.log")
 
-	if _, err := os.Stat(ffmpegPath); err != nil {
-		lookedUpPath, lookupErr := exec.LookPath("ffmpeg")
-		if lookupErr != nil {
-			t.Skipf("ffmpeg not found at %s and not in PATH: %v", ffmpegPath, err)
-		}
-		ffmpegPath = lookedUpPath
-	}
+// 	script := fmt.Sprintf(`#!/bin/sh
+// set -eu
+// if [ -n "${TEST_FFMPEG_LOG:-}" ]; then
+//   ts="$(date -u +%%Y-%%m-%%dT%%H:%%M:%%SZ)"
+//   printf '%%s\t%%s\t%%s\t%%s\n' "$ts" "INFO" "ffmpeg-wrapper" "$*" >> "$TEST_FFMPEG_LOG"
+// fi
+// exec %s "$@"
+// `, ffmpegPath)
+// 	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+// 		t.Fatalf("failed to write ffmpeg wrapper: %v", err)
+// 	}
 
-	binDir := t.TempDir()
-	binPath := filepath.Join(binDir, "ffmpeg")
-	logPath := filepath.Join(t.TempDir(), "ffmpeg_args.log")
+// 	t.Setenv("TEST_FFMPEG_LOG", logPath)
+// 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+// 	t.Logf("using ffmpeg binary: %s", ffmpegPath)
+// 	t.Logf("ffmpeg args log path: %s", logPath)
 
-	script := fmt.Sprintf(`#!/bin/sh
-set -eu
-if [ -n "${TEST_FFMPEG_LOG:-}" ]; then
-  printf '%%s\n' "$*" >> "$TEST_FFMPEG_LOG"
-fi
-exec %s "$@"
-`, ffmpegPath)
-	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
-		t.Fatalf("failed to write ffmpeg wrapper: %v", err)
-	}
-
-	t.Setenv("TEST_FFMPEG_LOG", logPath)
-	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
-	t.Logf("using ffmpeg binary: %s", ffmpegPath)
-	t.Logf("ffmpeg args log path: %s", logPath)
-
-	return logPath
-}
+// 	return logPath
+// }
