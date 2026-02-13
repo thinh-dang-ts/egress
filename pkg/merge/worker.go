@@ -294,6 +294,9 @@ func (w *MergeWorker) downloadFile(_ context.Context, remotePath, localPath stri
 
 // mergeTracks merges participant tracks using GStreamer
 func (w *MergeWorker) mergeTracks(ctx context.Context, manifest *config.AudioRecordingManifest, participantFiles map[string]string, alignment *AlignmentResult, tmpDir string) (map[types.AudioRecordingFormat]string, error) {
+	participantGapFill := buildParticipantGapFillMap(manifest)
+	participantFiles = w.prepareParticipantFilesForMerge(ctx, participantFiles, participantGapFill, tmpDir, manifest.SampleRate)
+
 	mergedFiles := make(map[types.AudioRecordingFormat]string)
 	manifest.ChannelCount = int32(len(participantFiles))
 
@@ -310,6 +313,150 @@ func (w *MergeWorker) mergeTracks(ctx context.Context, manifest *config.AudioRec
 	}
 
 	return mergedFiles, nil
+}
+
+func (w *MergeWorker) prepareParticipantFilesForMerge(ctx context.Context, participantFiles map[string]string, participantGapFill map[string]bool, tmpDir string, sampleRate int32) map[string]string {
+	logger.Debugw("prepareParticipantFilesForMerge", "participantFiles", participantFiles, "participantGapFill", participantGapFill, "tmpDir", tmpDir, "sampleRate", sampleRate)
+	prepared := make(map[string]string, len(participantFiles))
+	if len(participantFiles) == 0 {
+		return prepared
+	}
+
+	ffmpegPath, err := exec.LookPath("ffmpeg")
+	if err != nil {
+		logger.Warnw("ffmpeg not found, skipping participant gap fill before merge", err)
+		for participantID, filePath := range participantFiles {
+			prepared[participantID] = filePath
+		}
+		return prepared
+	}
+
+	gapFillDir := path.Join(tmpDir, "gapfill")
+	if err = os.MkdirAll(gapFillDir, 0755); err != nil {
+		logger.Warnw("failed to create gap-fill dir, using original participant files", err, "dir", gapFillDir)
+		for participantID, filePath := range participantFiles {
+			prepared[participantID] = filePath
+		}
+		return prepared
+	}
+
+	encodeSampleRate := nearestOpusRate(sampleRate)
+	bitrateKbps := opusBitrateForSampleRate(sampleRate)
+	for participantID, filePath := range participantFiles {
+		logger.Infow("shouldGapFillParticipantFile", "participantID", participantID, "filePath", filePath, "participantGapFill", participantGapFill)
+		if !shouldGapFillParticipantFile(participantID, filePath, participantGapFill) {
+			prepared[participantID] = filePath
+			continue
+		}
+
+		outputPath := path.Join(gapFillDir, fmt.Sprintf("%s_filled.ogg", sanitizeFilenameComponent(participantID)))
+		if err = fillRTPGapsWithSilence(ctx, ffmpegPath, filePath, outputPath, encodeSampleRate, bitrateKbps); err != nil {
+			logger.Warnw("failed to fill RTP gaps for participant file, using original", err,
+				"participantID", participantID,
+				"inputPath", filePath,
+			)
+			prepared[participantID] = filePath
+			continue
+		}
+
+		logger.Debugw("filled participant file", "participantID", participantID, "outputPath", outputPath)
+
+		prepared[participantID] = outputPath
+	}
+
+	return prepared
+}
+
+func fillRTPGapsWithSilence(ctx context.Context, ffmpegPath, inputPath, outputPath string, sampleRate int32, bitrateKbps int32) error {
+	args := []string{
+		"-nostdin",
+		"-v", "error",
+		"-y",
+		"-i", inputPath,
+		"-af", "aresample=async=1:first_pts=0",
+		"-c:a", "libopus",
+	}
+
+	if sampleRate > 0 {
+		args = append(args, "-ar", fmt.Sprintf("%d", sampleRate))
+	}
+	if bitrateKbps > 0 {
+		args = append(args, "-b:a", fmt.Sprintf("%dk", bitrateKbps))
+	}
+	args = append(args, outputPath)
+
+	cmd := exec.CommandContext(ctx, ffmpegPath, args...)
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		trimmed := strings.TrimSpace(string(output))
+		if trimmed == "" {
+			return fmt.Errorf("ffmpeg gap-fill failed: %w", err)
+		}
+		return fmt.Errorf("ffmpeg gap-fill failed: %w: %s", err, trimmed)
+	}
+
+	info, err := os.Stat(outputPath)
+	if err != nil {
+		return fmt.Errorf("filled participant file missing: %w", err)
+	}
+	if info.Size() == 0 {
+		return errors.New("filled participant file is empty")
+	}
+
+	return nil
+}
+
+func shouldGapFillFile(filePath string) bool {
+	ext := strings.ToLower(path.Ext(filePath))
+	return ext == ".ogg" || ext == ".opus"
+}
+
+func shouldGapFillParticipantFile(participantID, filePath string, participantGapFill map[string]bool) bool {
+	if shouldGapFillFile(filePath) {
+		return true
+	}
+	return participantGapFill[participantID]
+}
+
+func buildParticipantGapFillMap(manifest *config.AudioRecordingManifest) map[string]bool {
+	participants := make(map[string]bool)
+	if manifest == nil {
+		return participants
+	}
+
+	for _, participant := range manifest.Participants {
+		if participant == nil {
+			continue
+		}
+		for _, artifact := range participant.Artifacts {
+			if artifact == nil {
+				continue
+			}
+			if artifact.Format == types.AudioRecordingFormatOGGOpus {
+				participants[participant.ParticipantID] = true
+				break
+			}
+		}
+	}
+
+	return participants
+}
+
+func opusBitrateForSampleRate(sampleRate int32) int32 {
+	switch sampleRate {
+	case 8000:
+		return 24
+	case 16000:
+		return 32
+	case 24000:
+		return 48
+	case 32000:
+		return 64
+	case 44100, 48000:
+		return 96
+	default:
+		return 64
+	}
 }
 
 // runMergePipeline runs the GStreamer merge pipeline

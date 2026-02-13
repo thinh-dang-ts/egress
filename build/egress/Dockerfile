@@ -63,6 +63,7 @@ ARG TARGETPLATFORM
 RUN apt-get update && \
     apt-get install -y \
     curl \
+    ffmpeg \
     fonts-noto \
     gnupg \
     pulseaudio \

@@ -19,6 +19,7 @@ package merge
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path"
 	"strings"
@@ -60,6 +61,49 @@ fi
 	}
 
 	t.Setenv("TEST_GST_LOG", logPath)
+	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
+	return logPath
+}
+
+func installFakeFfmpeg(t *testing.T) string {
+	t.Helper()
+
+	binDir := t.TempDir()
+	logPath := path.Join(t.TempDir(), "ffmpeg_args.log")
+	binPath := path.Join(binDir, "ffmpeg")
+
+	script := `#!/bin/sh
+set -eu
+if [ -n "${TEST_FFMPEG_LOG:-}" ]; then
+  printf '%s\n' "$*" >> "$TEST_FFMPEG_LOG"
+fi
+if [ "${TEST_FFMPEG_FAIL:-0}" = "1" ]; then
+  exit 1
+fi
+in=""
+prev=""
+last=""
+for arg in "$@"; do
+  if [ "$prev" = "-i" ]; then
+    in="$arg"
+  fi
+  prev="$arg"
+  last="$arg"
+done
+if [ -n "$last" ]; then
+  mkdir -p "$(dirname "$last")"
+  if [ -n "$in" ] && [ -f "$in" ]; then
+    cat "$in" > "$last"
+  else
+    printf 'filled-audio' > "$last"
+  fi
+fi
+`
+	if err := os.WriteFile(binPath, []byte(script), 0o755); err != nil {
+		t.Fatalf("failed to write fake ffmpeg: %v", err)
+	}
+
+	t.Setenv("TEST_FFMPEG_LOG", logPath)
 	t.Setenv("PATH", binDir+":"+os.Getenv("PATH"))
 	return logPath
 }
@@ -525,6 +569,127 @@ func TestRunMergePipelineReturnsErrorOnCommandFailure(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "gst-launch failed") {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestPrepareParticipantFilesForMergeGapFillsOgg(t *testing.T) {
+	logPath := installFakeFfmpeg(t)
+
+	tmpDir := t.TempDir()
+	oggInput := path.Join(tmpDir, "p1.ogg")
+	wavInput := path.Join(tmpDir, "p2.wav")
+	if err := os.WriteFile(oggInput, []byte("ogg-content"), 0o644); err != nil {
+		t.Fatalf("failed to write ogg input: %v", err)
+	}
+	if err := os.WriteFile(wavInput, []byte("wav-content"), 0o644); err != nil {
+		t.Fatalf("failed to write wav input: %v", err)
+	}
+
+	w := &MergeWorker{}
+	prepared := w.prepareParticipantFilesForMerge(
+		context.Background(),
+		map[string]string{
+			"p1": oggInput,
+			"p2": wavInput,
+		},
+		map[string]bool{
+			"p1": true,
+		},
+		tmpDir,
+		44100,
+	)
+
+	if prepared["p2"] != wavInput {
+		t.Fatalf("expected non-ogg input to be unchanged, got %q", prepared["p2"])
+	}
+
+	filledPath := prepared["p1"]
+	if filledPath == "" {
+		t.Fatal("expected filled path for ogg input")
+	}
+	if filledPath == oggInput {
+		t.Fatalf("expected ogg input to be gap-filled, got original path %q", filledPath)
+	}
+	if !strings.Contains(filledPath, path.Join(tmpDir, "gapfill")) {
+		t.Fatalf("expected filled path to be in gapfill dir, got %q", filledPath)
+	}
+	if _, err := os.Stat(filledPath); err != nil {
+		t.Fatalf("expected filled file to exist: %v", err)
+	}
+
+	argsLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read ffmpeg log: %v", err)
+	}
+	logText := string(argsLog)
+	if !strings.Contains(logText, fmt.Sprintf("-i %s", oggInput)) {
+		t.Fatalf("expected ffmpeg to process ogg input, got: %s", logText)
+	}
+	if !strings.Contains(logText, "aresample=async=1:first_pts=0") {
+		t.Fatalf("expected async resample filter in ffmpeg args, got: %s", logText)
+	}
+	if strings.Contains(logText, wavInput) {
+		t.Fatalf("did not expect ffmpeg to process wav input, got: %s", logText)
+	}
+}
+
+func TestPrepareParticipantFilesForMergeGapFillsFormatWithNoExtension(t *testing.T) {
+	logPath := installFakeFfmpeg(t)
+
+	tmpDir := t.TempDir()
+	oggInputNoExt := path.Join(tmpDir, "p1")
+	if err := os.WriteFile(oggInputNoExt, []byte("ogg-content"), 0o644); err != nil {
+		t.Fatalf("failed to write ogg input without extension: %v", err)
+	}
+
+	w := &MergeWorker{}
+	prepared := w.prepareParticipantFilesForMerge(
+		context.Background(),
+		map[string]string{"p1": oggInputNoExt},
+		map[string]bool{"p1": true},
+		tmpDir,
+		44100,
+	)
+
+	filledPath := prepared["p1"]
+	if filledPath == "" {
+		t.Fatal("expected filled path for ogg input without extension")
+	}
+	if filledPath == oggInputNoExt {
+		t.Fatalf("expected input without extension to be gap-filled, got original path %q", filledPath)
+	}
+
+	argsLog, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatalf("failed to read ffmpeg log: %v", err)
+	}
+	logText := string(argsLog)
+	if !strings.Contains(logText, fmt.Sprintf("-i %s", oggInputNoExt)) {
+		t.Fatalf("expected ffmpeg to process input without extension, got: %s", logText)
+	}
+}
+
+func TestPrepareParticipantFilesForMergeFallsBackOnFfmpegFailure(t *testing.T) {
+	installFakeFfmpeg(t)
+	t.Setenv("TEST_FFMPEG_FAIL", "1")
+
+	tmpDir := t.TempDir()
+	oggInput := path.Join(tmpDir, "p1.ogg")
+	if err := os.WriteFile(oggInput, []byte("ogg-content"), 0o644); err != nil {
+		t.Fatalf("failed to write ogg input: %v", err)
+	}
+
+	w := &MergeWorker{}
+	prepared := w.prepareParticipantFilesForMerge(
+		context.Background(),
+		map[string]string{"p1": oggInput},
+		map[string]bool{"p1": true},
+		tmpDir,
+		44100,
+	)
+
+	if prepared["p1"] != oggInput {
+		t.Fatalf("expected fallback to original path, got %q", prepared["p1"])
 	}
 }
 

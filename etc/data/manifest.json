@@ -1,0 +1,52 @@
+{
+  "egress_id": "EG_8wwYLK3ixeT8",
+  "room_id": "RM_C2KpUT9YZFTB",
+  "room_name": "call-1770953256570-526",
+  "session_id": "EG_8wwYLK3ixeT8",
+  "formats": [
+    "ogg_opus"
+  ],
+  "sample_rate": 44100,
+  "channel_count": 2,
+  "started_at": 1770953265737934481,
+  "ended_at": 1770953278789941677,
+  "participants": [
+    {
+      "participant_id": "TR_AMPG9Ds3N5m88e",
+      "participant_identity": "TR_AMPG9Ds3N5m88e",
+      "track_id": "TR_AMPG9Ds3N5m88e",
+      "joined_at": 1770953265733534662,
+      "left_at": 1770953278491932000,
+      "artifacts": [
+        {
+          "format": "ogg_opus",
+          "filename": "TR_AMPG9Ds3N5m88e_TR_AMPG9Ds3N5m88e_20260213T032745.ogg",
+          "storage_uri": "file1",
+          "size": 140437,
+          "duration_ms": 11703,
+          "sha256": "6188fcaa6d46b10e59d8fe14e2ab78f8faeb28527c8dd643256f73a7c875649e",
+          "uploaded_at": 1770953278712825620
+        }
+      ]
+    },
+    {
+      "participant_id": "TR_AwHCsrHLwqSeo",
+      "participant_identity": "TR_AwHCsrHLwqSeo",
+      "track_id": "TR_AwHCsrHLwqSeo",
+      "joined_at": 1770953265735129992,
+      "left_at": 1770953278551314659,
+      "artifacts": [
+        {
+          "format": "ogg_opus",
+          "filename": "TR_AwHCsrHLwqSeo_TR_AwHCsrHLwqSeo_20260213T032745.ogg",
+          "storage_uri": "file2",
+          "size": 47061,
+          "duration_ms": 3921,
+          "sha256": "9d1f2a2978ed4e9823ba8c83156750294a51fcff1dbbf3d79d60a3caeb72d34b",
+          "uploaded_at": 1770953278789858647
+        }
+      ]
+    }
+  ],
+  "status": "completed"
+}

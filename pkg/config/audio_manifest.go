@@ -173,6 +173,19 @@ func (m *AudioRecordingManifest) UpdateParticipantLeftAt(participantID string, l
 	}
 }
 
+// UpdateParticipantJoinedAt updates a participant join timestamp.
+func (m *AudioRecordingManifest) UpdateParticipantJoinedAt(participantID string, joinedAt int64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	for _, p := range m.Participants {
+		if p.ParticipantID == participantID {
+			p.JoinedAt = joinedAt
+			return
+		}
+	}
+}
+
 // SetParticipantClockSync sets the clock sync info for a participant
 func (m *AudioRecordingManifest) SetParticipantClockSync(participantID string, clockSync *ClockSyncInfo) {
 	m.mu.Lock()

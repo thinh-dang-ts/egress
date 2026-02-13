@@ -19,6 +19,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-gst/go-gst/gst/app"
@@ -109,6 +110,66 @@ type TrackSource struct {
 	ClockRate          uint32
 	TempoController    *tempo.Controller
 	OnKeyframeRequired func()
+
+	clockSyncMu       sync.Mutex
+	clockSyncInfo     *ClockSyncInfo
+	clockSyncWatchers []func(*ClockSyncInfo)
+}
+
+// SetClockSyncInfo stores first-packet clock sync information for this track.
+// The first non-nil value wins.
+func (t *TrackSource) SetClockSyncInfo(info *ClockSyncInfo) {
+	if t == nil || info == nil {
+		return
+	}
+
+	t.clockSyncMu.Lock()
+	if t.clockSyncInfo != nil {
+		t.clockSyncMu.Unlock()
+		return
+	}
+
+	t.clockSyncInfo = info
+	watchers := append([]func(*ClockSyncInfo){}, t.clockSyncWatchers...)
+	t.clockSyncWatchers = nil
+	t.clockSyncMu.Unlock()
+
+	for _, watcher := range watchers {
+		if watcher != nil {
+			watcher(info)
+		}
+	}
+}
+
+// GetClockSyncInfo returns the current clock sync info, if available.
+func (t *TrackSource) GetClockSyncInfo() *ClockSyncInfo {
+	if t == nil {
+		return nil
+	}
+
+	t.clockSyncMu.Lock()
+	info := t.clockSyncInfo
+	t.clockSyncMu.Unlock()
+	return info
+}
+
+// OnClockSyncInfo registers a callback that fires when clock sync info is captured.
+// If info is already available, callback fires immediately.
+func (t *TrackSource) OnClockSyncInfo(watcher func(*ClockSyncInfo)) {
+	if t == nil || watcher == nil {
+		return
+	}
+
+	t.clockSyncMu.Lock()
+	if t.clockSyncInfo != nil {
+		info := t.clockSyncInfo
+		t.clockSyncMu.Unlock()
+		watcher(info)
+		return
+	}
+
+	t.clockSyncWatchers = append(t.clockSyncWatchers, watcher)
+	t.clockSyncMu.Unlock()
 }
 
 type AudioConfig struct {

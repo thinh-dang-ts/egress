@@ -91,6 +91,7 @@ type AppWriter struct {
 	lastDrift            time.Duration
 	lastPipelineCheckPTS time.Duration
 	initialized          bool
+	clockInfoCaptured    bool
 
 	// state
 	buildReady               core.Fuse
@@ -281,6 +282,10 @@ func (w *AppWriter) readNext() {
 	}
 
 	receivedAt := time.Now()
+	if !w.clockInfoCaptured {
+		w.captureClockSyncInfo(receivedAt, pkt)
+	}
+
 	var packets []jitter.ExtPacket
 	if !w.initialized {
 		ready, dropped, done := w.PrimeForStart(jitter.ExtPacket{ReceivedAt: receivedAt, Packet: pkt})
@@ -315,6 +320,27 @@ func (w *AppWriter) readNext() {
 	} else {
 		w.buffer.Push(pkt)
 	}
+}
+
+func (w *AppWriter) captureClockSyncInfo(receivedAt time.Time, pkt *rtp.Packet) {
+	if w.trackSource == nil || pkt == nil {
+		return
+	}
+
+	w.clockInfoCaptured = true
+	clockSync := &config.ClockSyncInfo{
+		ServerTimestamp: receivedAt.UnixNano(),
+		RTPClockBase:    pkt.Timestamp,
+		ClockRate:       w.trackSource.ClockRate,
+	}
+
+	w.trackSource.SetClockSyncInfo(clockSync)
+
+	w.logger.Debugw("captured clock sync info",
+		"serverTimestamp", clockSync.ServerTimestamp,
+		"rtpClockBase", clockSync.RTPClockBase,
+		"clockRate", clockSync.ClockRate,
+	)
 }
 
 func (w *AppWriter) handleReadError(err error) {

@@ -196,6 +196,15 @@ func (b *AudioRecordingBin) addParticipantBin(ts *config.TrackSource) error {
 	if b.arConf.AudioManifest != nil && b.arConf.AudioManifest.GetParticipant(participantID) == nil {
 		b.arConf.AudioManifest.AddParticipantAt(participantID, participantIdentity, ts.TrackID, joinedAt)
 	}
+	ts.OnClockSyncInfo(func(clockSync *config.ClockSyncInfo) {
+		if clockSync == nil || clockSync.ServerTimestamp <= 0 {
+			return
+		}
+		if b.arConf.AudioManifest != nil {
+			b.arConf.AudioManifest.UpdateParticipantJoinedAt(participantID, clockSync.ServerTimestamp)
+			b.arConf.AudioManifest.SetParticipantClockSync(participantID, clockSync)
+		}
+	})
 
 	// Create file sinks for each format
 	fileSinks := make(map[types.AudioRecordingFormat]*gst.Element)
