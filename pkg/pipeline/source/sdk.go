@@ -95,7 +95,7 @@ func NewSDKSource(ctx context.Context, p *config.PipelineConfig, callbacks *gstr
 		}),
 	}
 
-	if p.RequestType == types.RequestTypeRoomComposite {
+	if p.RequestType == types.RequestTypeRoomComposite || p.RequestType == types.RequestTypeAudioRecording {
 		// Enable Packet Burst Estimator for Room Composite requests
 		opts = append(opts, synchronizer.WithStartGate())
 	} else {
@@ -106,7 +106,7 @@ func NewSDKSource(ctx context.Context, p *config.PipelineConfig, callbacks *gstr
 	// add some leeway to the mixer latency
 	opts = append(opts, synchronizer.WithMediaRunningTime(nil, p.Latency.AudioMixerLatency+200*time.Millisecond))
 
-	if p.RequestType == types.RequestTypeRoomComposite || p.AudioTempoController.Enabled {
+	if p.RequestType == types.RequestTypeRoomComposite || p.AudioTempoController.Enabled || p.RequestType == types.RequestTypeAudioRecording {
 		// in case of room composite don't adjust audio timestamps on RTCP sender reports,
 		// to avoid gaps in the audio stream
 		opts = append(opts, synchronizer.WithAudioPTSAdjustmentDisabled())
@@ -201,7 +201,7 @@ func (s *SDKSource) joinRoom() error {
 		OnDisconnected: s.onDisconnected,
 	}
 
-	if s.RequestType == types.RequestTypeRoomComposite {
+	if s.RequestType == types.RequestTypeRoomComposite || s.RequestType == types.RequestTypeAudioRecording {
 		cb.ParticipantCallback.OnTrackPublished = s.onTrackPublished
 	}
 
@@ -220,7 +220,7 @@ func (s *SDKSource) joinRoom() error {
 	var fileIdentifier string
 	var w, h uint32
 	switch s.RequestType {
-	case types.RequestTypeRoomComposite:
+	case types.RequestTypeRoomComposite, types.RequestTypeAudioRecording:
 		fileIdentifier = s.room.Name()
 		// room_name and room_id are already handled as replacements
 
@@ -472,7 +472,7 @@ func (s *SDKSource) subscribe(track lksdk.TrackPublication) error {
 func (s *SDKSource) onTrackSubscribed(track *webrtc.TrackRemote, pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
 	s.subLock.RLock()
 
-	if s.initialized.IsBroken() && s.RequestType != types.RequestTypeParticipant && s.RequestType != types.RequestTypeRoomComposite {
+	if s.initialized.IsBroken() && s.RequestType != types.RequestTypeParticipant && s.RequestType != types.RequestTypeRoomComposite && s.RequestType != types.RequestTypeAudioRecording {
 		s.subLock.RUnlock()
 		return
 	}
@@ -629,7 +629,7 @@ func (s *SDKSource) createWriter(
 }
 
 func (s *SDKSource) onTrackPublished(pub *lksdk.RemoteTrackPublication, rp *lksdk.RemoteParticipant) {
-	if s.RequestType != types.RequestTypeParticipant && s.RequestType != types.RequestTypeRoomComposite {
+	if s.RequestType != types.RequestTypeParticipant && s.RequestType != types.RequestTypeRoomComposite && s.RequestType != types.RequestTypeAudioRecording {
 		return
 	}
 
@@ -655,7 +655,7 @@ func (s *SDKSource) shouldSubscribe(pub lksdk.TrackPublication) bool {
 		default:
 			return s.ScreenShare
 		}
-	case types.RequestTypeRoomComposite:
+	case types.RequestTypeRoomComposite, types.RequestTypeAudioRecording:
 		switch pub.Kind() {
 		case lksdk.TrackKindAudio:
 			return s.AudioEnabled
@@ -698,7 +698,7 @@ func (s *SDKSource) onTrackFinished(trackID string) {
 
 	if writer != nil {
 		active := s.active.Dec()
-		shouldContinue := s.RequestType == types.RequestTypeParticipant || s.RequestType == types.RequestTypeRoomComposite
+		shouldContinue := s.RequestType == types.RequestTypeParticipant || s.RequestType == types.RequestTypeRoomComposite || s.RequestType == types.RequestTypeAudioRecording
 
 		if shouldContinue {
 			trackKind := writer.TrackKind()

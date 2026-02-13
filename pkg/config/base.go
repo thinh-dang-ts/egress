@@ -94,9 +94,9 @@ type LatencyConfig struct {
 	JitterBufferLatency             time.Duration `yaml:"jitter_buffer_latency"`                         // jitter buffer max latency for sdk egress
 	AudioMixerLatency               time.Duration `yaml:"audio_mixer_latency"`                           // audio mixer latency, must be greater than jitter buffer latency
 	PipelineLatency                 time.Duration `yaml:"pipeline_latency"`                              // max latency for the entire pipeline
-	RTPMaxAllowedTsDiff             time.Duration `ymal:"rtp_max_allowed_ts_diff"`                       // max allowed PTS discont. for a RTP stream, before applying PTS alignment
-	RTPMaxDriftAdjustment           time.Duration `ymal:"rtp_max_drift_adjustment,omitempty"`            // max allowed drift adjustment for a RTP stream
-	RTPDriftAdjustmentWindowPercent float64       `ymal:"rtp_drift_adjustment_window_percent,omitempty"` // how much to throttle drift adjustment, 0.0 disables it
+	RTPMaxAllowedTsDiff             time.Duration `yaml:"rtp_max_allowed_ts_diff"`                       // max allowed PTS discont. for a RTP stream, before applying PTS alignment
+	RTPMaxDriftAdjustment           time.Duration `yaml:"rtp_max_drift_adjustment,omitempty"`            // max allowed drift adjustment for a RTP stream
+	RTPDriftAdjustmentWindowPercent float64       `yaml:"rtp_drift_adjustment_window_percent,omitempty"` // how much to throttle drift adjustment, 0.0 disables it
 	OldPacketThreshold              time.Duration `yaml:"old_packet_threshold,omitempty"`                // syncrhonizer drops packets older than this, 0 to disable packet drops
 }
 

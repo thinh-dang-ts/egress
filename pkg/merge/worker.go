@@ -344,7 +344,7 @@ func (w *MergeWorker) prepareParticipantFilesForMerge(ctx context.Context, parti
 	encodeSampleRate := nearestOpusRate(sampleRate)
 	bitrateKbps := opusBitrateForSampleRate(sampleRate)
 	for participantID, filePath := range participantFiles {
-		logger.Infow("shouldGapFillParticipantFile", "participantID", participantID, "filePath", filePath, "participantGapFill", participantGapFill)
+		logger.Debugw("shouldGapFillParticipantFile", "participantID", participantID, "filePath", filePath, "participantGapFill", participantGapFill)
 		if !shouldGapFillParticipantFile(participantID, filePath, participantGapFill) {
 			prepared[participantID] = filePath
 			continue
