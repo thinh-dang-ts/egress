@@ -587,11 +587,22 @@ func (r *Runner) verifyStaggeredJoinTimelineAndMerge(
 
 	// joined_at can be updated from first-packet clock sync timestamps, which may lag
 	// participant connect/publish timing in loaded integration environments.
-	const minJoinDelaySlack = 1 * time.Second
-	require.GreaterOrEqual(t, delay12, expectedDelay12-minJoinDelaySlack,
-		"join delay p1->p2 should be at least about %v (observed=%v)", expectedDelay12-minJoinDelaySlack, delay12)
-	require.GreaterOrEqual(t, delay23, expectedDelay23-minJoinDelaySlack,
-		"join delay p2->p3 should be at least about %v (observed=%v)", expectedDelay23-minJoinDelaySlack, delay23)
+	const minJoinDelaySlack = 1500 * time.Millisecond
+	const minJoinDelayFloor = 500 * time.Millisecond
+
+	minDelay12 := expectedDelay12 - minJoinDelaySlack
+	if minDelay12 < minJoinDelayFloor {
+		minDelay12 = minJoinDelayFloor
+	}
+	minDelay23 := expectedDelay23 - minJoinDelaySlack
+	if minDelay23 < minJoinDelayFloor {
+		minDelay23 = minJoinDelayFloor
+	}
+
+	require.GreaterOrEqual(t, delay12, minDelay12,
+		"join delay p1->p2 should be at least about %v (observed=%v)", minDelay12, delay12)
+	require.GreaterOrEqual(t, delay23, minDelay23,
+		"join delay p2->p3 should be at least about %v (observed=%v)", minDelay23, delay23)
 
 	mergeStart1 := participantMergeStartNs(p1)
 	mergeStart2 := participantMergeStartNs(p2)

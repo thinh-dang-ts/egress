@@ -44,6 +44,7 @@ func (r *Runner) RunTests(t *testing.T) {
 	// r.testMulti(t)
 	// r.testEdgeCases(t)
 	r.testIsolatedAudioRecording(t)
+	r.testIsolatedAudioEncryption(t)
 }
 
 func (r *Runner) run(t *testing.T, test *testCase, f func(*testing.T, *testCase)) bool {

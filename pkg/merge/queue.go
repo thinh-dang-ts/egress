@@ -21,6 +21,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/livekit/egress/pkg/config"
 	"github.com/livekit/protocol/logger"
 )
 
@@ -50,16 +51,17 @@ const (
 
 // MergeJob represents a merge job in the queue
 type MergeJob struct {
-	ID            string         `json:"id"`
-	ManifestPath  string         `json:"manifest_path"`
-	SessionID     string         `json:"session_id"`
-	Status        MergeJobStatus `json:"status"`
-	Retries       int            `json:"retries"`
-	CreatedAt     int64          `json:"created_at"`
-	StartedAt     int64          `json:"started_at,omitempty"`
-	CompletedAt   int64          `json:"completed_at,omitempty"`
-	Error         string         `json:"error,omitempty"`
-	WorkerID      string         `json:"worker_id,omitempty"`
+	ID           string                   `json:"id"`
+	ManifestPath string                   `json:"manifest_path"`
+	SessionID    string                   `json:"session_id"`
+	Encryption   *config.EncryptionConfig `json:"encryption,omitempty"`
+	Status       MergeJobStatus           `json:"status"`
+	Retries      int                      `json:"retries"`
+	CreatedAt    int64                    `json:"created_at"`
+	StartedAt    int64                    `json:"started_at,omitempty"`
+	CompletedAt  int64                    `json:"completed_at,omitempty"`
+	Error        string                   `json:"error,omitempty"`
+	WorkerID     string                   `json:"worker_id,omitempty"`
 }
 
 // MergeQueue manages the Redis-based merge job queue
@@ -75,11 +77,12 @@ func NewMergeQueue(client redis.UniversalClient) *MergeQueue {
 }
 
 // Enqueue adds a new merge job to the queue
-func (q *MergeQueue) Enqueue(ctx context.Context, manifestPath, sessionID string) (*MergeJob, error) {
+func (q *MergeQueue) Enqueue(ctx context.Context, manifestPath, sessionID string, encryption *config.EncryptionConfig) (*MergeJob, error) {
 	job := &MergeJob{
 		ID:           generateJobID(sessionID),
 		ManifestPath: manifestPath,
 		SessionID:    sessionID,
+		Encryption:   cloneEncryptionConfig(encryption),
 		Status:       MergeJobStatusPending,
 		CreatedAt:    time.Now().UnixNano(),
 	}
@@ -258,8 +261,8 @@ func NewMergeJobEnqueuer(client redis.UniversalClient) *MergeJobEnqueuerImpl {
 }
 
 // EnqueueMergeJob implements the MergeJobEnqueuer interface
-func (e *MergeJobEnqueuerImpl) EnqueueMergeJob(manifestPath string, sessionID string) error {
-	_, err := e.queue.Enqueue(context.Background(), manifestPath, sessionID)
+func (e *MergeJobEnqueuerImpl) EnqueueMergeJob(manifestPath string, sessionID string, encryption *config.EncryptionConfig) error {
+	_, err := e.queue.Enqueue(context.Background(), manifestPath, sessionID, encryption)
 	return err
 }
 

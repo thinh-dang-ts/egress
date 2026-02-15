@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"strings"
@@ -27,6 +28,7 @@ import (
 	"time"
 
 	"github.com/livekit/egress/pkg/config"
+	"github.com/livekit/egress/pkg/encryption"
 	"github.com/livekit/egress/pkg/types"
 )
 
@@ -346,7 +348,7 @@ func TestDownloadParticipantFilesLocalPrefersOgg(t *testing.T) {
 	}
 
 	w := &MergeWorker{}
-	files, err := w.downloadParticipantFiles(context.Background(), manifest, t.TempDir())
+	files, err := w.downloadParticipantFiles(context.Background(), manifest, t.TempDir(), nil)
 	if err != nil {
 		t.Fatalf("downloadParticipantFiles() error = %v", err)
 	}
@@ -359,6 +361,225 @@ func TestDownloadParticipantFilesLocalPrefersOgg(t *testing.T) {
 	}
 	if files["p3"] != "/tmp/p3.wav" {
 		t.Fatalf("p3 file = %q, want /tmp/p3.wav", files["p3"])
+	}
+}
+
+func TestDownloadParticipantFilesLocalDecryptsAES(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	key, err := encryption.GenerateMasterKeyBase64()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	encryptor, err := encryption.NewEnvelopeEncryptorFromBase64(key)
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+
+	plaintext := []byte("participant-audio-plain")
+	encryptedInput := path.Join(tmpDir, "p1_encrypted.ogg")
+	if err = writeEncryptedFile(encryptedInput, plaintext, encryptor); err != nil {
+		t.Fatalf("failed to write encrypted participant file: %v", err)
+	}
+
+	manifest := &config.AudioRecordingManifest{
+		Encryption: string(config.EncryptionModeAES),
+		Participants: []*config.ParticipantRecordingInfo{
+			{
+				ParticipantID: "p1",
+				Artifacts: []*config.AudioArtifact{
+					{
+						Format:     types.AudioRecordingFormatOGGOpus,
+						StorageURI: encryptedInput,
+						Filename:   "p1.ogg",
+					},
+				},
+			},
+		},
+	}
+
+	w := &MergeWorker{}
+	files, err := w.downloadParticipantFiles(context.Background(), manifest, tmpDir, encryptor)
+	if err != nil {
+		t.Fatalf("downloadParticipantFiles() error = %v", err)
+	}
+
+	decryptedPath := files["p1"]
+	if decryptedPath == "" {
+		t.Fatal("expected decrypted participant file path")
+	}
+	if decryptedPath == encryptedInput {
+		t.Fatalf("expected decrypted file path to differ from encrypted input, got %q", decryptedPath)
+	}
+
+	decryptedData, err := os.ReadFile(decryptedPath)
+	if err != nil {
+		t.Fatalf("failed to read decrypted participant file: %v", err)
+	}
+	if string(decryptedData) != string(plaintext) {
+		t.Fatalf("decrypted participant data mismatch: got %q, want %q", string(decryptedData), string(plaintext))
+	}
+}
+
+func TestGetMergeEncryptor_NonAESManifestReturnsNil(t *testing.T) {
+	w := &MergeWorker{}
+	manifest := &config.AudioRecordingManifest{
+		Encryption: "",
+	}
+
+	encryptor, err := w.getMergeEncryptor(nil, manifest)
+	if err != nil {
+		t.Fatalf("getMergeEncryptor() error = %v, want nil", err)
+	}
+	if encryptor != nil {
+		t.Fatal("expected nil encryptor for non-AES manifest")
+	}
+}
+
+func TestGetMergeEncryptor_AESMissingConfigReturnsError(t *testing.T) {
+	w := &MergeWorker{}
+	manifest := &config.AudioRecordingManifest{
+		Encryption: string(config.EncryptionModeAES),
+	}
+
+	encryptor, err := w.getMergeEncryptor(nil, manifest)
+	if err == nil {
+		t.Fatal("expected error for missing AES encryption config")
+	}
+	if !strings.Contains(err.Error(), "missing encryption config") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if encryptor != nil {
+		t.Fatal("expected nil encryptor when config is missing")
+	}
+}
+
+func TestGetMergeEncryptor_AESUsesJobConfig(t *testing.T) {
+	key, err := encryption.GenerateMasterKeyBase64()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	w := &MergeWorker{}
+	manifest := &config.AudioRecordingManifest{
+		Encryption: string(config.EncryptionModeAES),
+	}
+	job := &MergeJob{
+		Encryption: &config.EncryptionConfig{
+			Mode:      config.EncryptionModeAES,
+			MasterKey: key,
+		},
+	}
+
+	encryptor, err := w.getMergeEncryptor(job, manifest)
+	if err != nil {
+		t.Fatalf("getMergeEncryptor() error = %v", err)
+	}
+	if encryptor == nil {
+		t.Fatal("expected non-nil encryptor")
+	}
+}
+
+func TestGetMergeEncryptor_AESUsesWorkerFallbackWhenJobIsNone(t *testing.T) {
+	key, err := encryption.GenerateMasterKeyBase64()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+
+	w := &MergeWorker{
+		config: &MergeWorkerConfig{
+			Encryption: &config.EncryptionConfig{
+				Mode:      config.EncryptionModeAES,
+				MasterKey: key,
+			},
+		},
+	}
+	manifest := &config.AudioRecordingManifest{
+		Encryption: string(config.EncryptionModeAES),
+	}
+	job := &MergeJob{
+		Encryption: &config.EncryptionConfig{
+			Mode: config.EncryptionModeNone,
+		},
+	}
+
+	encryptor, err := w.getMergeEncryptor(job, manifest)
+	if err != nil {
+		t.Fatalf("getMergeEncryptor() error = %v", err)
+	}
+	if encryptor == nil {
+		t.Fatal("expected worker fallback encryptor")
+	}
+}
+
+func TestGetMergeEncryptor_AESModeMismatchReturnsError(t *testing.T) {
+	w := &MergeWorker{}
+	manifest := &config.AudioRecordingManifest{
+		Encryption: string(config.EncryptionModeAES),
+	}
+	job := &MergeJob{
+		Encryption: &config.EncryptionConfig{
+			Mode: config.EncryptionModeS3SSE,
+		},
+	}
+
+	encryptor, err := w.getMergeEncryptor(job, manifest)
+	if err == nil {
+		t.Fatal("expected mode mismatch error")
+	}
+	if !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if encryptor != nil {
+		t.Fatal("expected nil encryptor on mode mismatch")
+	}
+}
+
+func TestGetMergeEncryptor_AESMissingMasterKeyReturnsError(t *testing.T) {
+	w := &MergeWorker{}
+	manifest := &config.AudioRecordingManifest{
+		Encryption: string(config.EncryptionModeAES),
+	}
+	job := &MergeJob{
+		Encryption: &config.EncryptionConfig{
+			Mode:      config.EncryptionModeAES,
+			MasterKey: "",
+		},
+	}
+
+	encryptor, err := w.getMergeEncryptor(job, manifest)
+	if err == nil {
+		t.Fatal("expected missing key error")
+	}
+	if !strings.Contains(err.Error(), "missing encryption master key") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if encryptor != nil {
+		t.Fatal("expected nil encryptor when key is missing")
+	}
+}
+
+func TestGetMergeEncryptor_AESInvalidKeyReturnsError(t *testing.T) {
+	w := &MergeWorker{}
+	manifest := &config.AudioRecordingManifest{
+		Encryption: string(config.EncryptionModeAES),
+	}
+	job := &MergeJob{
+		Encryption: &config.EncryptionConfig{
+			Mode:      config.EncryptionModeAES,
+			MasterKey: "not-base64",
+		},
+	}
+
+	encryptor, err := w.getMergeEncryptor(job, manifest)
+	if err == nil {
+		t.Fatal("expected invalid key error")
+	}
+	if !strings.Contains(err.Error(), "invalid encryption master key") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if encryptor != nil {
+		t.Fatal("expected nil encryptor for invalid key")
 	}
 }
 
@@ -387,7 +608,7 @@ func TestUploadMergedFilesLocal(t *testing.T) {
 	}
 
 	w := &MergeWorker{}
-	if err := w.uploadMergedFiles(context.Background(), manifest, mergedFiles, manifestPath); err != nil {
+	if err := w.uploadMergedFiles(context.Background(), manifest, mergedFiles, manifestPath, nil); err != nil {
 		t.Fatalf("uploadMergedFiles() error = %v", err)
 	}
 
@@ -418,6 +639,66 @@ func TestUploadMergedFilesLocal(t *testing.T) {
 	}
 	if _, err := os.Stat(path.Join(path.Dir(manifestPath), "room_mix_room-1.wav")); err != nil {
 		t.Fatalf("expected copied room_mix_room-1.wav: %v", err)
+	}
+}
+
+func TestUploadMergedFilesLocalEncryptsAES(t *testing.T) {
+	tmpDir := t.TempDir()
+	manifestPath := path.Join(tmpDir, "out", "manifest.json")
+	mergedPath := path.Join(tmpDir, "room_mix_plain.ogg")
+	plaintext := []byte("merged-audio-plaintext")
+	if err := os.WriteFile(mergedPath, plaintext, 0o644); err != nil {
+		t.Fatalf("failed to write merged input: %v", err)
+	}
+
+	key, err := encryption.GenerateMasterKeyBase64()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	encryptor, err := encryption.NewEnvelopeEncryptorFromBase64(key)
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+
+	w := &MergeWorker{}
+	manifest := &config.AudioRecordingManifest{
+		RoomName:     "room-aes",
+		SessionID:    "session-aes",
+		Encryption:   string(config.EncryptionModeAES),
+		Participants: []*config.ParticipantRecordingInfo{},
+	}
+	if err = w.uploadMergedFiles(
+		context.Background(),
+		manifest,
+		map[types.AudioRecordingFormat]string{types.AudioRecordingFormatOGGOpus: mergedPath},
+		manifestPath,
+		encryptor,
+	); err != nil {
+		t.Fatalf("uploadMergedFiles() error = %v", err)
+	}
+
+	if manifest.RoomMix == nil || len(manifest.RoomMix.Artifacts) != 1 {
+		t.Fatalf("expected one room mix artifact, got %#v", manifest.RoomMix)
+	}
+
+	artifactPath := manifest.RoomMix.Artifacts[0].StorageURI
+	header := make([]byte, 4)
+	f, err := os.Open(artifactPath)
+	if err != nil {
+		t.Fatalf("failed to open merged artifact: %v", err)
+	}
+	_, _ = f.Read(header)
+	_ = f.Close()
+	if string(header) != encryption.HeaderMagic {
+		t.Fatalf("expected encrypted artifact header %q, got %q", encryption.HeaderMagic, string(header))
+	}
+
+	decrypted, err := readDecryptedFile(artifactPath, encryptor)
+	if err != nil {
+		t.Fatalf("failed to decrypt merged artifact: %v", err)
+	}
+	if string(decrypted) != string(plaintext) {
+		t.Fatalf("decrypted merged artifact mismatch: got %q, want %q", string(decrypted), string(plaintext))
 	}
 }
 
@@ -795,4 +1076,151 @@ func TestProcessJobLocalMergesAndUpdatesManifest(t *testing.T) {
 	if _, err = os.Stat(path.Join(manifestDir, "room_mix_room-e2e.wav")); err != nil {
 		t.Fatalf("expected room_mix_room-e2e.wav output: %v", err)
 	}
+}
+
+func TestProcessJobLocalMergesAndUpdatesManifest_AES(t *testing.T) {
+	installFakeGstLaunch(t)
+
+	tmpDir := t.TempDir()
+	manifestDir := path.Join(tmpDir, "manifest")
+	if err := os.MkdirAll(manifestDir, 0o755); err != nil {
+		t.Fatalf("failed to create manifest dir: %v", err)
+	}
+	manifestPath := path.Join(manifestDir, "manifest.json")
+
+	key, err := encryption.GenerateMasterKeyBase64()
+	if err != nil {
+		t.Fatalf("failed to generate key: %v", err)
+	}
+	encryptor, err := encryption.NewEnvelopeEncryptorFromBase64(key)
+	if err != nil {
+		t.Fatalf("failed to create encryptor: %v", err)
+	}
+
+	p1File := path.Join(tmpDir, "p1.ogg")
+	p2File := path.Join(tmpDir, "p2.ogg")
+	if err = writeEncryptedFile(p1File, []byte("p1-plain"), encryptor); err != nil {
+		t.Fatalf("failed to write encrypted p1 file: %v", err)
+	}
+	if err = writeEncryptedFile(p2File, []byte("p2-plain"), encryptor); err != nil {
+		t.Fatalf("failed to write encrypted p2 file: %v", err)
+	}
+
+	manifest := &config.AudioRecordingManifest{
+		RoomName:   "room-e2e-aes",
+		SessionID:  "session-e2e-aes",
+		Encryption: string(config.EncryptionModeAES),
+		StartedAt:  time.Now().UnixNano(),
+		SampleRate: 44100,
+		Formats:    []types.AudioRecordingFormat{types.AudioRecordingFormatOGGOpus},
+		Participants: []*config.ParticipantRecordingInfo{
+			{
+				ParticipantID: "p1",
+				JoinedAt:      time.Now().Add(-5 * time.Second).UnixNano(),
+				Artifacts: []*config.AudioArtifact{
+					{
+						Format:     types.AudioRecordingFormatOGGOpus,
+						Filename:   "p1.ogg",
+						StorageURI: p1File,
+						DurationMs: 1000,
+					},
+				},
+			},
+			{
+				ParticipantID: "p2",
+				JoinedAt:      time.Now().Add(-4 * time.Second).UnixNano(),
+				Artifacts: []*config.AudioArtifact{
+					{
+						Format:     types.AudioRecordingFormatOGGOpus,
+						Filename:   "p2.ogg",
+						StorageURI: p2File,
+						DurationMs: 1000,
+					},
+				},
+			},
+		},
+	}
+	manifestData, err := json.Marshal(manifest)
+	if err != nil {
+		t.Fatalf("failed to marshal manifest: %v", err)
+	}
+	if err = os.WriteFile(manifestPath, manifestData, 0o644); err != nil {
+		t.Fatalf("failed to write manifest: %v", err)
+	}
+
+	w := &MergeWorker{
+		config: &MergeWorkerConfig{
+			WorkerID: "test-worker-aes",
+			TmpDir:   path.Join(tmpDir, "work"),
+		},
+	}
+	job := &MergeJob{
+		ID:           "job-aes-1",
+		ManifestPath: manifestPath,
+		SessionID:    "session-e2e-aes",
+		Encryption: &config.EncryptionConfig{
+			Mode:      config.EncryptionModeAES,
+			MasterKey: key,
+		},
+	}
+	if err = w.processJob(context.Background(), job); err != nil {
+		t.Fatalf("processJob() error = %v", err)
+	}
+
+	updatedData, err := os.ReadFile(manifestPath)
+	if err != nil {
+		t.Fatalf("failed reading updated manifest: %v", err)
+	}
+	var updated config.AudioRecordingManifest
+	if err = json.Unmarshal(updatedData, &updated); err != nil {
+		t.Fatalf("failed to unmarshal updated manifest: %v", err)
+	}
+	if updated.RoomMix == nil {
+		t.Fatal("expected room_mix in updated manifest")
+	}
+	if len(updated.RoomMix.Artifacts) != 1 {
+		t.Fatalf("room_mix artifact count = %d, want 1", len(updated.RoomMix.Artifacts))
+	}
+
+	artifactPath := updated.RoomMix.Artifacts[0].StorageURI
+	header := make([]byte, 4)
+	f, err := os.Open(artifactPath)
+	if err != nil {
+		t.Fatalf("failed to open merged artifact: %v", err)
+	}
+	_, _ = f.Read(header)
+	_ = f.Close()
+	if string(header) != encryption.HeaderMagic {
+		t.Fatalf("expected encrypted artifact header %q, got %q", encryption.HeaderMagic, string(header))
+	}
+
+	decrypted, err := readDecryptedFile(artifactPath, encryptor)
+	if err != nil {
+		t.Fatalf("failed to decrypt merged artifact: %v", err)
+	}
+	if string(decrypted) != "merged-audio" {
+		t.Fatalf("unexpected decrypted merged payload: got %q", string(decrypted))
+	}
+}
+
+func writeEncryptedFile(path string, plaintext []byte, encryptor *encryption.EnvelopeEncryptor) error {
+	writer, err := encryption.NewEncryptedTempFile(path, encryptor)
+	if err != nil {
+		return err
+	}
+	if _, err = writer.Write(plaintext); err != nil {
+		_ = writer.Close()
+		return err
+	}
+	return writer.Close()
+}
+
+func readDecryptedFile(path string, encryptor *encryption.EnvelopeEncryptor) ([]byte, error) {
+	reader, err := encryption.NewEncryptedTempFileReader(path, encryptor)
+	if err != nil {
+		return nil, err
+	}
+	defer reader.Close()
+
+	return io.ReadAll(reader)
 }

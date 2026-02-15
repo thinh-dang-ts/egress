@@ -65,7 +65,7 @@ type ParticipantAudioSink struct {
 
 // MergeJobEnqueuer interface for enqueuing merge jobs
 type MergeJobEnqueuer interface {
-	EnqueueMergeJob(manifestPath string, sessionID string) error
+	EnqueueMergeJob(manifestPath string, sessionID string, encryption *config.EncryptionConfig) error
 	Wait() // blocks until all enqueued jobs complete (no-op for async implementations)
 }
 
@@ -511,7 +511,7 @@ func (s *AudioRecordingSink) Close() error {
 
 	// Enqueue merge job if FinalRoomMix is enabled
 	if s.arConf.HasFinalRoomMix() && s.mergeJobEnqueuer != nil {
-		if err := s.mergeJobEnqueuer.EnqueueMergeJob(manifestLocation, s.arConf.SessionID); err != nil {
+		if err := s.mergeJobEnqueuer.EnqueueMergeJob(manifestLocation, s.arConf.SessionID, s.arConf.Encryption); err != nil {
 			logger.Errorw("failed to enqueue merge job", err)
 			// Don't return error - recording is complete, merge is optional
 		} else {

@@ -320,13 +320,15 @@ type mockMergeEnqueuer struct {
 	called      bool
 	manifestArg string
 	sessionArg  string
+	encryption  *config.EncryptionConfig
 	err         error
 }
 
-func (m *mockMergeEnqueuer) EnqueueMergeJob(manifestPath string, sessionID string) error {
+func (m *mockMergeEnqueuer) EnqueueMergeJob(manifestPath string, sessionID string, encryption *config.EncryptionConfig) error {
 	m.called = true
 	m.manifestArg = manifestPath
 	m.sessionArg = sessionID
+	m.encryption = encryption
 	return m.err
 }
 

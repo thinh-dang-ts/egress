@@ -15,8 +15,11 @@
 package merge
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
+
+	"github.com/livekit/egress/pkg/config"
 )
 
 func TestAlignmentInfoOffset(t *testing.T) {
@@ -177,5 +180,39 @@ func TestAlignmentResult(t *testing.T) {
 	// Second participant should have 2 minute offset
 	if result.Alignments[1].Offset != 2*time.Minute {
 		t.Errorf("expected second participant offset 2m, got %v", result.Alignments[1].Offset)
+	}
+}
+
+func TestMergeJobEncryptionJSONRoundTrip(t *testing.T) {
+	job := &MergeJob{
+		ID:           "job-enc-1",
+		ManifestPath: "manifest.json",
+		SessionID:    "session-enc-1",
+		Status:       MergeJobStatusPending,
+		CreatedAt:    time.Now().UnixNano(),
+		Encryption: &config.EncryptionConfig{
+			Mode:      config.EncryptionModeAES,
+			MasterKey: "base64-key",
+		},
+	}
+
+	b, err := json.Marshal(job)
+	if err != nil {
+		t.Fatalf("failed to marshal job: %v", err)
+	}
+
+	var decoded MergeJob
+	if err = json.Unmarshal(b, &decoded); err != nil {
+		t.Fatalf("failed to unmarshal job: %v", err)
+	}
+
+	if decoded.Encryption == nil {
+		t.Fatal("expected encryption config to round-trip")
+	}
+	if decoded.Encryption.Mode != config.EncryptionModeAES {
+		t.Fatalf("encryption mode = %q, want %q", decoded.Encryption.Mode, config.EncryptionModeAES)
+	}
+	if decoded.Encryption.MasterKey != "base64-key" {
+		t.Fatalf("master key = %q, want %q", decoded.Encryption.MasterKey, "base64-key")
 	}
 }

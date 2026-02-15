@@ -36,6 +36,7 @@ import (
 	"github.com/redis/go-redis/v9"
 
 	"github.com/livekit/egress/pkg/config"
+	"github.com/livekit/egress/pkg/encryption"
 	"github.com/livekit/egress/pkg/errors"
 	"github.com/livekit/egress/pkg/types"
 	"github.com/livekit/protocol/logger"
@@ -48,6 +49,7 @@ type MergeWorkerConfig struct {
 	TmpDir        string
 	PollInterval  time.Duration
 	StorageConfig *config.StorageConfig
+	Encryption    *config.EncryptionConfig
 }
 
 // MergeWorker processes merge jobs from the queue
@@ -177,8 +179,13 @@ func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 		return fmt.Errorf("failed to download manifest: %w", err)
 	}
 
+	encryptor, err := w.getMergeEncryptor(job, manifest)
+	if err != nil {
+		return fmt.Errorf("failed to initialize encryption for merge: %w", err)
+	}
+
 	// 2. Download all participant files
-	participantFiles, err := w.downloadParticipantFiles(ctx, manifest, jobTmpDir)
+	participantFiles, err := w.downloadParticipantFiles(ctx, manifest, jobTmpDir, encryptor)
 	if err != nil {
 		return fmt.Errorf("failed to download participant files: %w", err)
 	}
@@ -200,7 +207,7 @@ func (w *MergeWorker) processJob(ctx context.Context, job *MergeJob) error {
 	}
 
 	// 5. Upload merged files
-	if err := w.uploadMergedFiles(ctx, manifest, mergedFiles, job.ManifestPath); err != nil {
+	if err := w.uploadMergedFiles(ctx, manifest, mergedFiles, job.ManifestPath, encryptor); err != nil {
 		return fmt.Errorf("failed to upload merged files: %w", err)
 	}
 
@@ -242,8 +249,38 @@ func (w *MergeWorker) downloadManifest(ctx context.Context, manifestPath string,
 	return &manifest, nil
 }
 
+func (w *MergeWorker) getMergeEncryptor(job *MergeJob, manifest *config.AudioRecordingManifest) (*encryption.EnvelopeEncryptor, error) {
+	if manifest == nil || manifest.Encryption != string(config.EncryptionModeAES) {
+		return nil, nil
+	}
+
+	var encryptionConfig *config.EncryptionConfig
+	if job != nil && job.Encryption != nil && job.Encryption.Mode != config.EncryptionModeNone {
+		encryptionConfig = job.Encryption
+	} else if w != nil && w.config != nil && w.config.Encryption != nil && w.config.Encryption.Mode != config.EncryptionModeNone {
+		encryptionConfig = w.config.Encryption
+	}
+
+	if encryptionConfig == nil {
+		return nil, errors.New("missing encryption config for AES-encrypted merge job")
+	}
+	if encryptionConfig.Mode != config.EncryptionModeAES {
+		return nil, fmt.Errorf("merge job encryption mode %q does not match manifest encryption %q",
+			encryptionConfig.Mode, manifest.Encryption)
+	}
+	if encryptionConfig.MasterKey == "" {
+		return nil, errors.New("missing encryption master key for AES-encrypted merge job")
+	}
+
+	encryptor, err := encryption.NewEnvelopeEncryptorFromBase64(encryptionConfig.MasterKey)
+	if err != nil {
+		return nil, fmt.Errorf("invalid encryption master key: %w", err)
+	}
+	return encryptor, nil
+}
+
 // downloadParticipantFiles downloads all participant audio files
-func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *config.AudioRecordingManifest, tmpDir string) (map[string]string, error) {
+func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *config.AudioRecordingManifest, tmpDir string, encryptor *encryption.EnvelopeEncryptor) (map[string]string, error) {
 	files := make(map[string]string) // participantID -> local file path
 
 	for _, p := range manifest.Participants {
@@ -263,17 +300,35 @@ func (w *MergeWorker) downloadParticipantFiles(ctx context.Context, manifest *co
 			artifact = p.Artifacts[0]
 		}
 
+		var inputPath string
 		if w.hasRemoteStorage() {
 			localPath := path.Join(tmpDir, fmt.Sprintf("%s_%s", p.ParticipantID, artifact.Filename))
 			if err := w.downloadFile(ctx, artifact.StorageURI, localPath); err != nil {
 				logger.Warnw("failed to download participant file", err, "participantID", p.ParticipantID)
 				continue
 			}
-			files[p.ParticipantID] = localPath
+			inputPath = localPath
 		} else {
 			// Local storage: use the storage URI directly as it's a local path
-			files[p.ParticipantID] = artifact.StorageURI
+			inputPath = artifact.StorageURI
 		}
+
+		if encryptor == nil {
+			files[p.ParticipantID] = inputPath
+			continue
+		}
+
+		ext := path.Ext(artifact.Filename)
+		if ext == "" {
+			ext = path.Ext(inputPath)
+		}
+
+		decryptedPath := path.Join(tmpDir, fmt.Sprintf("%s_decrypted%s", sanitizeFilenameComponent(p.ParticipantID), ext))
+		if err := decryptFile(inputPath, decryptedPath, encryptor); err != nil {
+			return nil, fmt.Errorf("failed to decrypt participant file for %s: %w", p.ParticipantID, err)
+		}
+
+		files[p.ParticipantID] = decryptedPath
 	}
 
 	return files, nil
@@ -291,6 +346,32 @@ func (w *MergeWorker) downloadFile(_ context.Context, remotePath, localPath stri
 
 	_, err := w.storage.DownloadFile(localPath, w.normalizeRemotePath(remotePath))
 	return err
+}
+
+func decryptFile(inputPath string, outputPath string, encryptor *encryption.EnvelopeEncryptor) error {
+	reader, err := encryption.NewEncryptedTempFileReader(inputPath, encryptor)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+
+	out, err := os.Create(outputPath)
+	if err != nil {
+		return err
+	}
+
+	if _, err = io.Copy(out, reader); err != nil {
+		_ = out.Close()
+		_ = os.Remove(outputPath)
+		return err
+	}
+
+	if err = out.Close(); err != nil {
+		_ = os.Remove(outputPath)
+		return err
+	}
+
+	return nil
 }
 
 // mergeTracks merges participant tracks using GStreamer
@@ -657,14 +738,25 @@ func absInt32(n int32) int32 {
 }
 
 // uploadMergedFiles uploads the merged files to storage
-func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.AudioRecordingManifest, mergedFiles map[types.AudioRecordingFormat]string, manifestPath string) error {
+func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.AudioRecordingManifest, mergedFiles map[types.AudioRecordingFormat]string, manifestPath string, encryptor *encryption.EnvelopeEncryptor) error {
 	manifest.InitRoomMix()
 	remoteManifestPath := w.normalizeRemotePath(manifestPath)
 
 	for format, localPath := range mergedFiles {
+		uploadPath := localPath
+		cleanup := func() {}
+		var err error
+		if encryptor != nil {
+			uploadPath, cleanup, err = encryptFileForUpload(localPath, encryptor)
+			if err != nil {
+				return err
+			}
+		}
+
 		// Calculate checksum
-		checksum, size, err := w.calculateChecksum(localPath)
+		checksum, size, err := w.calculateChecksum(uploadPath)
 		if err != nil {
+			cleanup()
 			return err
 		}
 
@@ -675,19 +767,22 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 		// Upload or copy to final location
 		location := storagePath
 		if w.storage != nil {
-			uploadedLocation, _, err := w.storage.UploadFile(localPath, storagePath, string(config.GetOutputTypeForFormat(format)))
+			uploadedLocation, _, err := w.storage.UploadFile(uploadPath, storagePath, string(config.GetOutputTypeForFormat(format)))
 			if err != nil {
+				cleanup()
 				return err
 			}
 			location = uploadedLocation
 		} else {
 			// Local storage: copy merged file next to manifest
 			destPath := path.Join(path.Dir(manifestPath), mixedFilename)
-			if err := copyFile(localPath, destPath); err != nil {
+			if err := copyFile(uploadPath, destPath); err != nil {
+				cleanup()
 				return fmt.Errorf("failed to copy merged file: %w", err)
 			}
 			location = destPath
 		}
+		cleanup()
 
 		// Create artifact
 		artifact := &config.AudioArtifact{
@@ -704,6 +799,35 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 
 	manifest.SetRoomMixStatus(config.AudioRecordingStatusCompleted, "")
 	return nil
+}
+
+func encryptFileForUpload(localPath string, encryptor *encryption.EnvelopeEncryptor) (string, func(), error) {
+	src, err := os.Open(localPath)
+	if err != nil {
+		return "", nil, err
+	}
+	defer src.Close()
+
+	encryptedPath := localPath + ".enc"
+	writer, err := encryption.NewEncryptedTempFile(encryptedPath, encryptor)
+	if err != nil {
+		return "", nil, err
+	}
+
+	if _, err = io.Copy(writer, src); err != nil {
+		_ = writer.Close()
+		_ = os.Remove(encryptedPath)
+		return "", nil, err
+	}
+
+	if err = writer.Close(); err != nil {
+		_ = os.Remove(encryptedPath)
+		return "", nil, err
+	}
+
+	return encryptedPath, func() {
+		_ = os.Remove(encryptedPath)
+	}, nil
 }
 
 func mixedAudioFilename(roomName string, format types.AudioRecordingFormat) string {

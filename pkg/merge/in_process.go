@@ -65,11 +65,12 @@ func NewInProcessMergeEnqueuer(storageConfig *config.StorageConfig) (*InProcessM
 }
 
 // EnqueueMergeJob runs the merge job directly in a goroutine.
-func (e *InProcessMergeEnqueuer) EnqueueMergeJob(manifestPath string, sessionID string) error {
+func (e *InProcessMergeEnqueuer) EnqueueMergeJob(manifestPath string, sessionID string, encryption *config.EncryptionConfig) error {
 	job := &MergeJob{
 		ID:           generateJobID(sessionID),
 		ManifestPath: manifestPath,
 		SessionID:    sessionID,
+		Encryption:   cloneEncryptionConfig(encryption),
 		Status:       MergeJobStatusRunning,
 		CreatedAt:    time.Now().UnixNano(),
 		StartedAt:    time.Now().UnixNano(),

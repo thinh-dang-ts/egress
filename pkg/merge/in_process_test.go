@@ -48,7 +48,7 @@ func TestInProcessMergeEnqueuerEnqueueReturnsNil(t *testing.T) {
 
 	// EnqueueMergeJob should return nil immediately (goroutine runs async)
 	// The goroutine will fail because there's no real manifest, but that's expected
-	err = enqueuer.EnqueueMergeJob("/nonexistent/manifest.json", "test-session")
+	err = enqueuer.EnqueueMergeJob("/nonexistent/manifest.json", "test-session", nil)
 	if err != nil {
 		t.Fatalf("expected EnqueueMergeJob to return nil, got %v", err)
 	}

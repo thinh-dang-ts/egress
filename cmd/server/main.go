@@ -269,6 +269,7 @@ func runMergeWorker(ctx context.Context, c *cli.Command) error {
 		WorkerID:      workerID,
 		TmpDir:        tmpDir,
 		StorageConfig: conf.StorageConfig,
+		Encryption:    conf.AudioRecordingEncryption,
 	}
 
 	worker, err := merge.NewMergeWorker(rc, workerConfig)
