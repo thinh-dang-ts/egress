@@ -61,6 +61,11 @@ type AudioRecordingManifest struct {
 	// Mixed room audio (if FinalRoomMix enabled)
 	RoomMix *RoomMixInfo `json:"room_mix,omitempty"`
 
+	// DirectMixPath is the desired filename (no directory) for the room-mix artifact.
+	// Set only when the request provided an explicit filepath with an audio extension.
+	// The merge worker uses this instead of the default "room_mix_<room>.ogg" name.
+	DirectMixPath string `json:"direct_mix_path,omitempty"`
+
 	// Status and error
 	Status AudioRecordingStatus `json:"status"`
 	Error  string               `json:"error,omitempty"`

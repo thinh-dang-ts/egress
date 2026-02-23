@@ -63,7 +63,8 @@ type AudioRecordingConfig struct {
 
 	// Storage settings
 	StorageConfig *StorageConfig `yaml:"storage,omitempty" json:"storage,omitempty"`
-	PathPrefix    string         `yaml:"path_prefix" json:"path_prefix"` // e.g., "{env}/{room_id}/{session_id}"
+	PathPrefix     string `yaml:"path_prefix" json:"path_prefix"` // e.g., "{env}/{room_id}/{session_id}"
+	DirectFilepath string `yaml:"-" json:"-"`                     // processed Filepath from request; drives paths when non-empty
 
 	// Local paths (generated)
 	LocalDir string `yaml:"-" json:"-"`
@@ -213,25 +214,40 @@ func (c *AudioRecordingConfig) BuildParticipantFilepath(participantID, participa
 
 // BuildMixedFilepath builds the storage filepath for the mixed room audio
 func (c *AudioRecordingConfig) BuildMixedFilepath(format types.AudioRecordingFormat) string {
+	if c.DirectFilepath != "" && c.hasDirectFilepathExtension() {
+		return c.DirectFilepath
+	}
+
 	ext := GetFileExtensionForFormat(format)
 	timestamp := time.Now().Format("20060102T150405")
-
 	filename := fmt.Sprintf("room_mix_%s%s", timestamp, ext)
 	prefix := c.buildStoragePrefix()
 	return path.Join(prefix, filename)
 }
 
+// hasDirectFilepathExtension reports whether DirectFilepath ends with a known audio extension.
+func (c *AudioRecordingConfig) hasDirectFilepathExtension() bool {
+	ext := strings.ToLower(path.Ext(c.DirectFilepath))
+	return ext == ".ogg" || ext == ".wav"
+}
+
 // buildStoragePrefix builds the storage prefix with template substitution
 func (c *AudioRecordingConfig) buildStoragePrefix() string {
+	if c.DirectFilepath != "" {
+		if c.hasDirectFilepathExtension() {
+			return path.Dir(c.DirectFilepath)
+		}
+		return path.Clean(c.DirectFilepath)
+	}
+
 	prefix := c.PathPrefix
 	if prefix == "" {
 		prefix = "{room_name}/{session_id}"
 	}
 
-	// Replace template variables
 	replacements := map[string]string{
 		"{room_name}":  c.RoomName,
-		"{room_id}":    c.RoomName, // Room ID and name are often the same
+		"{room_id}":    c.RoomName,
 		"{session_id}": c.SessionID,
 		"{time}":       time.Now().Format("2006-01-02T150405"),
 		"{utc}":        fmt.Sprintf("%d", time.Now().Unix()),
@@ -353,6 +369,7 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 		Encryption:         copyEncryptionConfig(p.AudioRecordingEncryption),
 		StorageConfig:      fileConfig.StorageConfig,
 		PathPrefix:         p.AudioRecordingPathPrefix,
+		DirectFilepath:     directFilepathFromFileConfig(fileConfig),
 		LocalDir:           localDir,
 		ParticipantConfigs: make(map[string]*ParticipantAudioConfig),
 	}
@@ -373,7 +390,40 @@ func (p *PipelineConfig) createAudioRecordingConfigFromFileOutput() *AudioRecord
 		encryptionMode,
 	)
 
+	// When the caller supplied an explicit filepath with an audio extension, record
+	// just the filename so the merge worker can use it as the mix artifact name
+	// (preserving the user-requested filename) instead of the default room_mix_<room>.ogg.
+	if fileConfig != nil && isExplicitAudioExtension(fileConfig.ExplicitFilepath) {
+		arConfig.AudioManifest.DirectMixPath = path.Base(fileConfig.StorageFilepath)
+	}
+
 	return arConfig
+}
+
+// directFilepathFromFileConfig returns the processed storage filepath when the caller
+// explicitly set a Filepath on the request; otherwise returns "".
+func directFilepathFromFileConfig(fc *FileConfig) string {
+	if fc == nil || fc.ExplicitFilepath == "" {
+		return ""
+	}
+	return fc.StorageFilepath
+}
+
+// isExplicitAudioExtension reports whether the filepath ends with a known audio extension.
+// Used to distinguish "user requested an exact output path" from "user provided a prefix".
+func isExplicitAudioExtension(fp string) bool {
+	ext := strings.ToLower(path.Ext(fp))
+	return ext == ".ogg" || ext == ".wav"
+}
+
+// DirectMixFilename returns the filename (no directory) to use for the room-mix artifact
+// when the request included an explicit filepath with a known audio extension.
+// Returns "" when the default "room_mix_<room>.<ext>" naming should be used.
+func (c *AudioRecordingConfig) DirectMixFilename() string {
+	if c.DirectFilepath != "" && c.hasDirectFilepathExtension() {
+		return path.Base(c.DirectFilepath)
+	}
+	return ""
 }
 
 // HasIsolatedTracks returns true if isolated track recording is enabled

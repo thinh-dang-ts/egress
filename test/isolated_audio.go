@@ -137,6 +137,36 @@ func (r *Runner) testIsolatedAudioRecording(t *testing.T) {
 				},
 				custom: r.testIsolatedAudioStaggeredJoinOffsetsOrder,
 			},
+
+			// DirectFilepath with extension — final mix goes to exact path, participants in same dir.
+			{
+				name:        "IsolatedAudio_DirectFilepath_WithExtension",
+				requestType: types.RequestTypeRoomComposite,
+				publishOptions: publishOptions{
+					audioOnly:   true,
+					audioMixing: livekit.AudioMixing_DUAL_CHANNEL_ALTERNATE,
+				},
+				fileOptions: &fileOptions{
+					filename: "isolated_audio_direct_{time}.ogg",
+					fileType: livekit.EncodedFileType_OGG,
+				},
+				custom: r.testIsolatedAudioDirectFilepathWithExtension,
+			},
+
+			// DirectFilepath without extension — used as storage prefix.
+			{
+				name:        "IsolatedAudio_DirectFilepath_NoExtension",
+				requestType: types.RequestTypeRoomComposite,
+				publishOptions: publishOptions{
+					audioOnly:   true,
+					audioMixing: livekit.AudioMixing_DUAL_CHANNEL_ALTERNATE,
+				},
+				fileOptions: &fileOptions{
+					filename: "recordings/isolated_no_ext_{time}",
+					fileType: livekit.EncodedFileType_OGG,
+				},
+				custom: r.testIsolatedAudioDirectFilepathNoExtension,
+			},
 		} {
 			if r.Short {
 				// In short mode, only run the first test
@@ -919,5 +949,129 @@ func (r *Runner) verify8kOpusBitrateProfile(
 
 	if !verified {
 		require.Fail(t, "unable to verify 8k Opus bitrate profile")
+	}
+}
+
+// verifyDirectFilepathMixLocation asserts that the room mix artifact's base filename
+// starts with expectedMixPrefix and has expectedMixExt as its extension (verifying the
+// user-specified naming is honoured rather than the default room_mix_<room>.<ext>),
+// and that every participant artifact lives in the same directory as the mix.
+func (r *Runner) verifyDirectFilepathMixLocation(
+	t *testing.T,
+	info *livekit.EgressInfo,
+	storageConfig *config.StorageConfig,
+	expectedMixPrefix string,
+	expectedMixExt string,
+) {
+	t.Helper()
+	manifest, _ := r.loadIsolatedAudioManifest(t, info, storageConfig)
+	require.NotNil(t, manifest)
+	require.NotNil(t, manifest.RoomMix)
+	require.NotEmpty(t, manifest.RoomMix.Artifacts)
+
+	mixURI := manifest.RoomMix.Artifacts[0].StorageURI
+	mixBase := filepath.Base(mixURI)
+	require.True(t, strings.HasPrefix(mixBase, expectedMixPrefix),
+		"room mix should use user-specified filename prefix %q: got %q", expectedMixPrefix, mixURI)
+	require.True(t, strings.HasSuffix(mixBase, expectedMixExt),
+		"room mix should have extension %q: got %q", expectedMixExt, mixURI)
+
+	mixDir := filepath.Dir(mixURI)
+	for _, p := range manifest.Participants {
+		for _, a := range p.Artifacts {
+			require.Equal(t, mixDir, filepath.Dir(a.StorageURI),
+				"participant artifact %q should be in same dir as mix %q", a.StorageURI, mixURI)
+		}
+	}
+}
+
+func (r *Runner) testIsolatedAudioDirectFilepathWithExtension(t *testing.T, test *testCase) {
+	p1, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "direct-fp-p1",
+		ParticipantIdentity: fmt.Sprintf("direct-fp-p1-%d", rand.Intn(100)),
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p1.Disconnect)
+	r.publish(t, p1.LocalParticipant, types.MimeTypeOpus, make(chan struct{}))
+
+	p2, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "direct-fp-p2",
+		ParticipantIdentity: fmt.Sprintf("direct-fp-p2-%d", rand.Intn(100)),
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p2.Disconnect)
+	r.publish(t, p2.LocalParticipant, types.MimeTypeOpus, make(chan struct{}))
+
+	time.Sleep(2 * time.Second)
+
+	req := r.build(test)
+	storageConfig := r.getIsolatedAudioStorageConfig(t, req)
+	info := r.sendRequest(t, req)
+	egressID := info.EgressId
+
+	time.Sleep(15 * time.Second)
+	r.checkUpdate(t, egressID, livekit.EgressStatus_EGRESS_ACTIVE)
+	info = r.stopEgress(t, egressID)
+
+	r.verifyIsolatedAudioOutput(t, test, info, 2, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 2)
+	// filename: "isolated_audio_direct_{time}.ogg" — prefix before {time}, extension .ogg
+	r.verifyDirectFilepathMixLocation(t, info, storageConfig, "isolated_audio_direct_", ".ogg")
+}
+
+func (r *Runner) testIsolatedAudioDirectFilepathNoExtension(t *testing.T, test *testCase) {
+	p1, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "no-ext-fp-p1",
+		ParticipantIdentity: fmt.Sprintf("no-ext-fp-p1-%d", rand.Intn(100)),
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p1.Disconnect)
+	r.publish(t, p1.LocalParticipant, types.MimeTypeOpus, make(chan struct{}))
+
+	p2, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "no-ext-fp-p2",
+		ParticipantIdentity: fmt.Sprintf("no-ext-fp-p2-%d", rand.Intn(100)),
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p2.Disconnect)
+	r.publish(t, p2.LocalParticipant, types.MimeTypeOpus, make(chan struct{}))
+
+	time.Sleep(2 * time.Second)
+
+	req := r.build(test)
+	storageConfig := r.getIsolatedAudioStorageConfig(t, req)
+	info := r.sendRequest(t, req)
+	egressID := info.EgressId
+
+	time.Sleep(15 * time.Second)
+	r.checkUpdate(t, egressID, livekit.EgressStatus_EGRESS_ACTIVE)
+	info = r.stopEgress(t, egressID)
+
+	r.verifyIsolatedAudioOutput(t, test, info, 2, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 2)
+
+	manifest, _ := r.loadIsolatedAudioManifest(t, info, storageConfig)
+	require.NotNil(t, manifest)
+	for _, p := range manifest.Participants {
+		for _, a := range p.Artifacts {
+			require.True(t, strings.Contains(a.StorageURI, "/recordings/"),
+				"participant artifact should be under recordings/ prefix: %q", a.StorageURI)
+		}
+	}
+	for _, a := range manifest.RoomMix.Artifacts {
+		require.True(t, strings.Contains(a.StorageURI, "/recordings/"),
+			"room mix should be under recordings/ prefix: %q", a.StorageURI)
 	}
 }

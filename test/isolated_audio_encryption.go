@@ -70,6 +70,21 @@ func (r *Runner) testIsolatedAudioEncryption(t *testing.T) {
 		}
 
 		r.run(t, test, test.custom)
+
+		testDirectFP := &testCase{
+			name:        "IsolatedAudio_AES_DirectFilepath_WithExtension",
+			requestType: types.RequestTypeRoomComposite,
+			publishOptions: publishOptions{
+				audioOnly:   true,
+				audioMixing: livekit.AudioMixing_DUAL_CHANNEL_ALTERNATE,
+			},
+			fileOptions: &fileOptions{
+				filename: "isolated_audio_aes_direct_{time}.ogg",
+				fileType: livekit.EncodedFileType_OGG,
+			},
+			custom: r.testIsolatedAudioAESDirectFilepath,
+		}
+		r.run(t, testDirectFP, testDirectFP.custom)
 	})
 }
 
@@ -183,6 +198,50 @@ func (r *Runner) verifyArtifactIsEncryptedAudio(
 	require.Greater(t, stat.Size(), int64(0), "decrypted artifact should not be empty")
 
 	r.verifyAudioFile(t, decryptedPath)
+}
+
+func (r *Runner) testIsolatedAudioAESDirectFilepath(t *testing.T, test *testCase) {
+	p1, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "aes-direct-p1",
+		ParticipantIdentity: fmt.Sprintf("aes-direct-p1-%d", rand.Intn(100)),
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p1.Disconnect)
+	r.publish(t, p1.LocalParticipant, types.MimeTypeOpus, make(chan struct{}))
+
+	p2, err := lksdk.ConnectToRoom(r.WsUrl, lksdk.ConnectInfo{
+		APIKey:              r.ApiKey,
+		APISecret:           r.ApiSecret,
+		RoomName:            r.RoomName,
+		ParticipantName:     "aes-direct-p2",
+		ParticipantIdentity: fmt.Sprintf("aes-direct-p2-%d", rand.Intn(100)),
+	}, lksdk.NewRoomCallback())
+	require.NoError(t, err)
+	t.Cleanup(p2.Disconnect)
+	r.publish(t, p2.LocalParticipant, types.MimeTypeOpus, make(chan struct{}))
+
+	time.Sleep(2 * time.Second)
+
+	req := r.build(test)
+	storageConfig := r.getIsolatedAudioStorageConfig(t, req)
+
+	info := r.sendRequest(t, req)
+	egressID := info.EgressId
+
+	time.Sleep(15 * time.Second)
+	r.checkUpdate(t, egressID, livekit.EgressStatus_EGRESS_ACTIVE)
+	info = r.stopEgress(t, egressID)
+
+	r.verifyIsolatedAudioOutput(t, test, info, 2, storageConfig)
+	r.verifyMergedAudioOutput(t, info, storageConfig, 2)
+	// filename: "isolated_audio_aes_direct_{time}.ogg" — prefix before {time}, extension .ogg
+	r.verifyDirectFilepathMixLocation(t, info, storageConfig, "isolated_audio_aes_direct_", ".ogg")
+
+	manifest, _ := r.loadIsolatedAudioManifest(t, info, storageConfig)
+	r.verifyAESArtifactsEncrypted(t, info, storageConfig, manifest)
 }
 
 func decryptAudioArtifact(srcPath, dstPath string, encryptor *encryption.EnvelopeEncryptor) error {

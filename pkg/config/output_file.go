@@ -28,9 +28,10 @@ import (
 type FileConfig struct {
 	outputConfig
 
-	FileInfo        *livekit.FileInfo
-	LocalFilepath   string
-	StorageFilepath string
+	FileInfo         *livekit.FileInfo
+	LocalFilepath    string
+	StorageFilepath  string
+	ExplicitFilepath string // raw Filepath from request before any processing; empty if caller did not set Filepath
 
 	DisableManifest bool
 	StorageConfig   *StorageConfig
@@ -78,11 +79,12 @@ func (p *PipelineConfig) getFileConfig(outputType types.OutputType, req fileRequ
 	}
 
 	conf := &FileConfig{
-		outputConfig:    outputConfig{OutputType: outputType},
-		FileInfo:        &livekit.FileInfo{},
-		StorageFilepath: clean(req.GetFilepath()),
-		DisableManifest: req.GetDisableManifest(),
-		StorageConfig:   sc,
+		outputConfig:     outputConfig{OutputType: outputType},
+		FileInfo:         &livekit.FileInfo{},
+		ExplicitFilepath: req.GetFilepath(),        // raw, before any processing
+		StorageFilepath:  clean(req.GetFilepath()),
+		DisableManifest:  req.GetDisableManifest(),
+		StorageConfig:    sc,
 	}
 
 	// filename

@@ -760,8 +760,12 @@ func (w *MergeWorker) uploadMergedFiles(_ context.Context, manifest *config.Audi
 			return err
 		}
 
-		// Build storage path
+		// Build storage path: use the user-requested filename when available,
+		// otherwise fall back to the default "room_mix_<room>.<ext>" naming.
 		mixedFilename := mixedAudioFilename(manifest.RoomName, format)
+		if manifest.DirectMixPath != "" {
+			mixedFilename = manifest.DirectMixPath
+		}
 		storagePath := path.Join(path.Dir(remoteManifestPath), mixedFilename)
 
 		// Upload or copy to final location

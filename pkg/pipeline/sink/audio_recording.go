@@ -104,6 +104,8 @@ func newAudioRecordingSink(
 		o.SampleRate,
 		encryptionMode,
 	)
+	// Preserve the user-requested mix filename so the merge worker can use it.
+	o.AudioManifest.DirectMixPath = o.DirectMixFilename()
 
 	return sink, nil
 }
